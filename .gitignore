@@ -1,0 +1,40 @@
+# ====================================================================
+# Gitignore za Projekat iz Sistemskog Softvera
+# ====================================================================
+
+# --- Izvršni fajlovi ---
+/asembler
+/linker
+/emulator
+*.exe
+*.out
+
+# --- Objektni fajlovi i biblioteke ---
+*.o
+/obj/
+
+# --- Generisani fajlovi (Flex i Bison) ---
+# Ignorišemo generisani C++ kod unutar src/ i inc/ jer se pravi preko make
+/src/lexer.cpp
+/src/parser.cpp
+/inc/parser.hpp
+
+# Dodatni pomoćni fajlovi koje Bison zna da izbaci
+*.output
+*.location
+*.position
+location.hh
+position.hh
+stack.hh
+
+# --- Izlazni fajlovi asemblera ---
+# Sve što tvoj asembler izbaci (.o fajlovi u korenu) ne ide na Git
+/*_a.o
+/*_b.o
+/*_c.o
+
+# --- Razno ---
+.DS_Store
+Thumbs.db
+*.swp
+*~
