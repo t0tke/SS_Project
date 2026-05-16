@@ -239,7 +239,12 @@ void Assembler::writeOutput() {
         SectionInfo& sec=kv.second;
         f<<"#SECTION "<<kv.first<<" size="<<std::dec<<sec.data.size()<<"\n";
         for (size_t i=0;i<sec.data.size();i++) {
-            if (i%16==0) { if (i) f<<"\n"; f<<std::hex<<std::setw(4)<<std::setfill('0')<<i<<": "; }
+            if (i % 16 == 0) {
+                if (i) f << "\n";
+                // Eksplicitno prekidamo std::left i uvodimo std::right za ispis adrese
+                f << std::hex << std::right << std::setw(4) << std::setfill('0') << i << ": ";
+            }
+            // Sada se bajtovi garantovano ispisuju cisto
             f<<std::hex<<std::setw(2)<<std::setfill('0')<<(unsigned)sec.data[i]<<" ";
         }
         if (!sec.data.empty()) f<<"\n";
@@ -397,7 +402,7 @@ void Assembler::encodeHalt() { emit32(0x00000000u); }
 void Assembler::encodeInt()  { emit32(0x10000000u); }
 void Assembler::encodeIret() {
     emit32(0x93FE0004u); // pop pc
-    emit32(0x97E00004u); // pop status
+    emit32(0x970E0004u); // pop status
 }
 void Assembler::encodeRet()  { emit32(0x93FE0004u); }
 
@@ -479,17 +484,17 @@ void Assembler::ldImmediateOp(const char* imm) {
             pendingInstr_=0x91000000u|((uint32_t)v&0xFFFu); pendingNeedsPool_=false; return;
         }
     }
-    ensureSymStub(isNumStr(val)?"":val);
-    int instrPos=lc(); emit32(0x92F00000u); // placeholder, A=rd patch u finalizeLD
+    if (!isNumStr(val)) ensureSymStub(val);
+    int instrPos=lc(); emit32(0x92FF0000u); // placeholder, A=rd patch u finalizeLD
     addToPool(val,instrPos); pendingInstr_=0; pendingNeedsPool_=true;
 }
 void Assembler::ldMemLitOp(const char* numStr) {
-    int instrPos=lc(); emit32(0x92F00000u);
+    int instrPos=lc(); emit32(0x92FF0000u);
     addToPool(std::string(numStr),instrPos); pendingInstr_=0; pendingNeedsPool_=true;
 }
 void Assembler::ldMemSymOp(const char* symName) {
     std::string n(symName); ensureSymStub(n);
-    int instrPos=lc(); emit32(0x92F00000u);
+    int instrPos=lc(); emit32(0x92FF0000u);
     addToPool(n,instrPos); pendingInstr_=0; pendingNeedsPool_=true;
 }
 void Assembler::ldRegOp(const char* reg) {
