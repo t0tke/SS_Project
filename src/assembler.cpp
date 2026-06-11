@@ -278,7 +278,8 @@ void Assembler::writeOutput() {
 
 // ===== Direktive =====
 void Assembler::directiveGlobal(const char* sym) {
-    std::string n(sym); ensureSymStub(n); symtab_[n].isGlobal=true;
+    std::string n(sym); // konstruktor koji konvertuje const char* u std::string!
+    ensureSymStub(n); symtab_[n].isGlobal=true;
 }
 void Assembler::directiveExtern(const char* sym) { directiveGlobal(sym); }
 
