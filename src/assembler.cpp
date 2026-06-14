@@ -142,7 +142,7 @@ void Assembler::resolveEqus() {
             if (eq.src2.empty()) {
                 bool wasG=symtab_.count(eq.dest)&&symtab_[eq.dest].isGlobal;
                 Symbol& d=symtab_[eq.dest];
-                if (s1.type=="CONST"&&s1.section=="ABS") {
+                if (s1.type=="CONST"&&s1.section=="ABS") { //ovo ti je mrtav kod al nmvz samo nikad nece uci u ovu if granu
                     d.type="CONST"; d.value=s1.value+eq.addend; d.section="ABS";
                     d.isGlobal=wasG||s1.isGlobal; d.isDefined=true;
                 } else if (s1.section!="UND") {
@@ -171,6 +171,12 @@ void Assembler::resolveEqus() {
     if (!pendingEqus_.empty()) exit(1);
 }
 
+/*
+PC_REL grana u backpatch je potpuno mrtav kod jer:
+
+Branch (beq, bne, bgt) → ide kroz pool → relokacija je ABS_32
+JMP/CALL → ide kroz pool → relokacija je ABS_32
+.word simbol → addReloc → relokacija je ABS_32*/
 void Assembler::backpatch() {
     for (auto& kv : sections_) {
         const std::string& sn=kv.first;
@@ -288,7 +294,7 @@ void Assembler::startSection(const char* name) {
     curSection_=std::string(name);
     if (!sections_.count(curSection_)) {
         SectionInfo sec; sec.name=curSection_; sec.lc=0; sections_[curSection_]=sec;
-        Symbol s; s.type="SECTION"; s.value=0; s.section=curSection_; s.isGlobal=true; s.isDefined=true;
+        Symbol s; s.type="SECTION"; s.value=0; s.section=curSection_; s.isGlobal=false; s.isDefined=true;
         symtab_["."+curSection_]=s;
     }
 }
@@ -513,6 +519,7 @@ void Assembler::ldMemRegLitOp(const char* reg, const char* numStr) {
 void Assembler::ldMemRegSymOp(const char* reg, const char* sym) {
     fprintf(stderr,"Error: [%s+%s] – mora stati u 12b\n",reg,sym); exit(1);
 }
+
 void Assembler::finalizeLD(const char* rd) {
     int r=regIdx(rd);
     if (pendingNeedsPool_) {
