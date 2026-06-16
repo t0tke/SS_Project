@@ -15,7 +15,8 @@ Assembler* gAssembler = nullptr;
 // ===== Konstruktor =====
 Assembler::Assembler(const std::string& inFile, const std::string& outFile)
     : inFile_(inFile), outFile_(outFile), curSection_(""),
-      pendingInstr_(0), pendingNeedsPool_(false) {}
+      pendingInstr_(0), pendingNeedsPool_(false),
+      pendingLdNeedsDeref_(false) {}
 
 // ===== assemble() =====
 int Assembler::assemble() {
@@ -142,7 +143,7 @@ void Assembler::resolveEqus() {
             if (eq.src2.empty()) {
                 bool wasG=symtab_.count(eq.dest)&&symtab_[eq.dest].isGlobal;
                 Symbol& d=symtab_[eq.dest];
-                if (s1.type=="CONST"&&s1.section=="ABS") { //ovo ti je mrtav kod al nmvz samo nikad nece uci u ovu if granu
+                if (s1.type=="CONST"&&s1.section=="ABS") { 
                     d.type="CONST"; d.value=s1.value+eq.addend; d.section="ABS";
                     d.isGlobal=wasG||s1.isGlobal; d.isDefined=true;
                 } else if (s1.section!="UND") {
@@ -483,6 +484,7 @@ void Assembler::patchBranch(BranchType bt, const char* reg1, const char* reg2) {
 
 // LD operandi
 void Assembler::ldImmediateOp(const char* imm) {
+    pendingLdNeedsDeref_ = false;
     std::string val(imm); if (!val.empty()&&val[0]=='$') val=val.substr(1);
     if (isNumStr(val)) {
         int32_t v=(int32_t)strtol(val.c_str(),nullptr,0);
@@ -497,27 +499,45 @@ void Assembler::ldImmediateOp(const char* imm) {
 }
 void Assembler::ldMemLitOp(const char* numStr) {
     int instrPos=lc(); emit32(0x92FF0000u);
-    addToPool(std::string(numStr),instrPos); pendingInstr_=0; pendingNeedsPool_=true;
+    addToPool(std::string(numStr),instrPos); pendingInstr_=0; pendingNeedsPool_=true; pendingLdNeedsDeref_ = true;
 }
 void Assembler::ldMemSymOp(const char* symName) {
     std::string n(symName); ensureSymStub(n);
     int instrPos=lc(); emit32(0x92FF0000u);
-    addToPool(n,instrPos); pendingInstr_=0; pendingNeedsPool_=true;
+    addToPool(n,instrPos); pendingInstr_=0; pendingNeedsPool_=true; pendingLdNeedsDeref_ = true;
 }
 void Assembler::ldRegOp(const char* reg) {
-    pendingInstr_=0x91000000u|((regIdx(reg)&0xF)<<16); pendingNeedsPool_=false;
+    pendingInstr_=0x91000000u|((regIdx(reg)&0xF)<<16); pendingNeedsPool_=false; pendingLdNeedsDeref_ = false;
 }
 void Assembler::ldMemRegOp(const char* reg) {
-    pendingInstr_=0x92000000u|((regIdx(reg)&0xF)<<16); pendingNeedsPool_=false;
+    pendingInstr_=0x92000000u|((regIdx(reg)&0xF)<<16); pendingNeedsPool_=false; pendingLdNeedsDeref_ = false;
 }
 void Assembler::ldMemRegLitOp(const char* reg, const char* numStr) {
     int32_t disp=(int32_t)strtol(numStr,nullptr,0);
     if (disp<-2048||disp>2047) { fprintf(stderr,"Error: offset %d izvan 12b\n",disp); exit(1); }
     pendingInstr_=0x92000000u|((regIdx(reg)&0xF)<<16)|((uint32_t)disp&0xFFFu);
-    pendingNeedsPool_=false;
+    pendingNeedsPool_=false; pendingLdNeedsDeref_ = false;
 }
 void Assembler::ldMemRegSymOp(const char* reg, const char* sym) {
-    fprintf(stderr,"Error: [%s+%s] – mora stati u 12b\n",reg,sym); exit(1);
+    int r = regIdx(reg); std::string n(sym);
+    auto it = symtab_.find(n);
+    if (it == symtab_.end() ||
+        !it->second.isDefined ||
+        it->second.type != "CONST" ||
+        it->second.section != "ABS") {
+        fprintf(stderr,"Error (linija %d): simbol '%s' u [%%reg + simbol] mora biti poznata ABS konstanta u trenutku asembliranja\n",yylineno, sym);
+        exit(1);
+    }
+
+    int32_t v = (int32_t)it->second.value;
+    if (v < -2048 || v > 2047) {
+        fprintf(stderr,"Error (linija %d): vrednost simbola '%s' ne staje u 12-bit signed pomeraj\n",yylineno, sym);
+        exit(1);
+    }
+    // ld [%reg + simbol], %rd
+    // gpr[rd] <= mem32[gpr[reg] + gpr[0] + D]
+    pendingInstr_ =0x92000000u | ((uint32_t)(r & 0xF) << 16) | ((uint32_t)v & 0xFFFu);
+    pendingNeedsPool_ = false; pendingLdNeedsDeref_ = false;
 }
 
 void Assembler::finalizeLD(const char* rd) {
@@ -526,11 +546,12 @@ void Assembler::finalizeLD(const char* rd) {
         SectionInfo& sec=curSec(); int pos=sec.lc-4;
         uint32_t insn=read32(sec,pos);
         patch32(sec,pos,(insn&0xFF0FFFFFu)|((uint32_t)(r&0xF)<<20));
+        if(pendingLdNeedsDeref_) emit32(0x92000000u | ((uint32_t)(r & 0xF) << 20) | ((uint32_t)(r & 0xF) << 16));
     } else {
         pendingInstr_=(pendingInstr_&0xFF0FFFFFu)|((uint32_t)(r&0xF)<<20);
         emit32(pendingInstr_);
     }
-    pendingInstr_=0; pendingNeedsPool_=false;
+    pendingInstr_=0; pendingNeedsPool_=false; pendingLdNeedsDeref_ = false;
 }
 
 // ST operandi
@@ -541,19 +562,37 @@ void Assembler::stMemLitOp(const char* numStr) {
 void Assembler::stMemSymOp(const char* symName) {
     std::string n(symName); ensureSymStub(n);
     int instrPos=lc(); emit32(0x82F00000u);
-    addToPool(n,instrPos); pendingInstr_=0; pendingNeedsPool_=true;
+    addToPool(n,instrPos); pendingInstr_=0; pendingNeedsPool_=true; 
 }
 void Assembler::stMemRegOp(const char* reg) {
-    pendingInstr_=0x80000000u|((regIdx(reg)&0xF)<<20); pendingNeedsPool_=false;
+    pendingInstr_=0x80000000u|((regIdx(reg)&0xF)<<20); pendingNeedsPool_=false; 
 }
 void Assembler::stMemRegLitOp(const char* reg, const char* numStr) {
     int32_t disp=(int32_t)strtol(numStr,nullptr,0);
     if (disp<-2048||disp>2047) { fprintf(stderr,"Error: ST offset izvan 12b\n"); exit(1); }
     pendingInstr_=0x80000000u|((regIdx(reg)&0xF)<<20)|((uint32_t)disp&0xFFFu);
-    pendingNeedsPool_=false;
+    pendingNeedsPool_=false; 
 }
 void Assembler::stMemRegSymOp(const char* reg, const char* sym) {
-    fprintf(stderr,"Error: [%s+%s] – mora stati u 12b\n",reg,sym); exit(1);
+    int r = regIdx(reg);
+    std::string n(sym);
+
+    auto it = symtab_.find(n);
+
+    if (it == symtab_.end() || !it->second.isDefined || it->second.type != "CONST" || it->second.section != "ABS") {
+        fprintf(stderr, "Error (linija %d): simbol '%s' u [%%reg + simbol] mora biti poznata ABS konstanta u trenutku asembliranja\n", yylineno, sym);
+        exit(1);
+    }
+
+    int32_t disp = (int32_t)it->second.value;
+
+    if (disp < -2048 || disp > 2047) {
+        fprintf(stderr, "Error (linija %d): vrednost simbola '%s' ne staje u 12-bit signed pomeraj\n", yylineno, sym);
+        exit(1);
+    }
+
+    pendingInstr_ = 0x80000000u | ((uint32_t)(r & 0xF) << 20) | ((uint32_t)disp & 0xFFFu);
+    pendingNeedsPool_ = false; 
 }
 void Assembler::finalizeST(const char* rs) {
     int r=regIdx(rs);
@@ -565,7 +604,7 @@ void Assembler::finalizeST(const char* rs) {
         pendingInstr_=(pendingInstr_&0xFFFF0FFFu)|((uint32_t)(r&0xF)<<12);
         emit32(pendingInstr_);
     }
-    pendingInstr_=0; pendingNeedsPool_=false;
+    pendingInstr_=0; pendingNeedsPool_=false; 
 }
 
 void Assembler::encodeCsrrd(const char* csr, const char* gpr) {

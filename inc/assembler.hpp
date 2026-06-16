@@ -87,6 +87,7 @@ private:
     std::string curSection_;
     uint32_t pendingInstr_;
     bool pendingNeedsPool_;
+    bool pendingLdNeedsDeref_;
     
     std::map<std::string, SectionInfo> sections_;
     std::map<std::string, Symbol> symtab_;
