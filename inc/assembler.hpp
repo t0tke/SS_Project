@@ -90,6 +90,7 @@ private:
     bool pendingLdNeedsDeref_;
     
     std::map<std::string, SectionInfo> sections_;
+    std::vector<std::string> sectionOrder_;
     std::map<std::string, Symbol> symtab_;
     std::vector<PendingEqu> pendingEqus_;
 

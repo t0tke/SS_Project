@@ -79,6 +79,6 @@
 "+"                         { return PLUS;     }
 "-"                         { return MINUS;    }
 
-.   { fprintf(stderr, "[Lekser] Greska u liniji %d: neprepoznat karakter '%s'\n", yylineno, yytext); }
+.   { fprintf(stderr, "[Lekser] Greska u liniji %d: neprepoznat karakter '%s'\n", yylineno, yytext); return INVALID; }
 
 %%

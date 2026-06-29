@@ -22,7 +22,7 @@ extern Assembler* gAssembler;
     int   num;
 }
 
-%token EOL
+%token EOL INVALID
 %token HALT INT IRET RET
 %token CALL JMP BEQ BNE BGT
 %token PUSH POP NOT XCHG
@@ -54,7 +54,7 @@ line:
     | label EOL
     | label statement EOL
     |       statement EOL
-    | error EOL                    { yyerrok; }
+    | error EOL { YYABORT; }
     ;
 
 label:
@@ -74,7 +74,7 @@ directive:
     | DOT_SKIP    NUMBER           { gAssembler->directiveSkip($2); free($2); }
     | DOT_ASCII   STRING           { gAssembler->directiveAscii($2); free($2); }
     | DOT_EQU SYMBOL COMMA equ_expr { gAssembler->directiveEquExpr($2, $4); free($2); free($4); }
-    | DOT_END                      { gAssembler->directiveEnd(); }
+    | DOT_END                      { gAssembler->directiveEnd(); YYACCEPT; }
     ;
 
 sym_list:

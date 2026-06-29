@@ -226,7 +226,8 @@ void Assembler::writeOutput() {
 
     f<<"#SYMTAB\n"<<std::left<<std::setw(20)<<"Name"<<std::setw(10)<<"Type"
      <<std::setw(14)<<"Value"<<std::setw(16)<<"Section"<<"Global\n"<<std::string(63,'-')<<"\n";
-    for (auto& kv : sections_) {
+    for (auto& sectionName : sectionOrder_) {
+        auto& kv = *sections_.find(sectionName);
         std::string key="."+kv.first;
         if (!symtab_.count(key)) continue;
         Symbol& sym=symtab_[key];
@@ -242,7 +243,8 @@ void Assembler::writeOutput() {
          <<std::left<<std::setfill(' ')<<"  "<<std::setw(16)<<sym.section<<(sym.isGlobal?"yes":"no")<<"\n";
     }
     f<<"\n";
-    for (auto& kv : sections_) {
+    for (auto& sectionName : sectionOrder_) {
+        auto& kv = *sections_.find(sectionName);
         SectionInfo& sec=kv.second;
         f<<"#SECTION "<<kv.first<<" size="<<std::dec<<sec.data.size()<<"\n";
         for (size_t i=0;i<sec.data.size();i++) {
@@ -297,6 +299,7 @@ void Assembler::startSection(const char* name) {
         SectionInfo sec; sec.name=curSection_; sec.lc=0; sections_[curSection_]=sec;
         Symbol s; s.type="SECTION"; s.value=0; s.section=curSection_; s.isGlobal=false; s.isDefined=true;
         symtab_["."+curSection_]=s;
+        sectionOrder_.push_back(curSection_);
     }
 }
 void Assembler::directiveWordLit(const char* numStr) {
@@ -314,6 +317,7 @@ void Assembler::directiveWordSym(const char* symName) {
 }
 void Assembler::directiveSkip(const char* numStr) {
     int n=(int)strtol(numStr,nullptr,0);
+    if (n < 0) { fprintf(stderr,"Error: .skip ne može biti negativan\n"); exit(1); }
     SectionInfo& sec=curSec();
     for (int i=0;i<n;i++) sec.data.push_back(0);
     sec.lc+=n;
