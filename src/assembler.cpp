@@ -3,7 +3,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <algorithm>
 #include <fstream>
 #include <iomanip>
 
@@ -189,7 +188,6 @@ void Assembler::backpatch() {
             Symbol sym=it->second;
             if (sym.type=="CONST"&&sym.section=="ABS") {
                 if (rel.type=="ABS_32") patch32(sec,rel.offset,(uint32_t)(sym.value+rel.addend));
-                else { fprintf(stderr,"Error: PC_REL nad ABS '%s'\n",rel.symbol.c_str()); exit(1); }
                 continue;
             }
             if (!sym.isGlobal&&sym.section==sn&&sym.isDefined) {
@@ -198,13 +196,6 @@ void Assembler::backpatch() {
                     patch32(sec,rel.offset,v);
                     RelEntry r2; r2.offset=rel.offset; r2.type="ABS_32";
                     r2.symbol="."+sn; r2.addend=(int)v; keep.push_back(r2);
-                } else if (rel.type=="PC_REL") {
-                    int disp=sym.value-(rel.offset+4)+rel.addend;
-                    if (disp<-2048||disp>2047) {
-                        fprintf(stderr,"Error: PC_REL %d za '%s' izvan 12b\n",disp,rel.symbol.c_str()); exit(1);
-                    }
-                    uint32_t insn=read32(sec,rel.offset);
-                    patch32(sec,rel.offset,(insn&~0xFFFu)|((uint32_t)disp&0xFFFu));
                 }
                 continue;
             }
@@ -296,7 +287,7 @@ void Assembler::startSection(const char* name) {
     flushCurrentPool();
     curSection_=std::string(name);
     if (!sections_.count(curSection_)) {
-        SectionInfo sec; sec.name=curSection_; sec.lc=0; sections_[curSection_]=sec;
+        SectionInfo sec; sec.lc=0; sections_[curSection_]=sec;
         Symbol s; s.type="SECTION"; s.value=0; s.section=curSection_; s.isGlobal=false; s.isDefined=true;
         symtab_["."+curSection_]=s;
         sectionOrder_.push_back(curSection_);
@@ -371,7 +362,7 @@ void Assembler::directiveEquExpr(const char* dest, const char* expr) {
         auto it=symtab_.find(lhs);
         if (it!=symtab_.end()&&it->second.isDefined) { setAlias(it->second,addend); return; }
         mkstub(d); mkstub(lhs);
-        PendingEqu eq; eq.dest=d; eq.src1=lhs; eq.src2=""; eq.addend=addend; eq.isSub=false;
+        PendingEqu eq; eq.dest=d; eq.src1=lhs; eq.src2=""; eq.addend=addend; 
         pendingEqus_.push_back(eq); return;
     }
     if (lhsNum&&rhsSym) {
@@ -379,7 +370,7 @@ void Assembler::directiveEquExpr(const char* dest, const char* expr) {
         auto it=symtab_.find(rhs);
         if (it!=symtab_.end()&&it->second.isDefined) { setAlias(it->second,addend); return; }
         mkstub(d); mkstub(rhs);
-        PendingEqu eq; eq.dest=d; eq.src1=rhs; eq.src2=""; eq.addend=addend; eq.isSub=false;
+        PendingEqu eq; eq.dest=d; eq.src1=rhs; eq.src2=""; eq.addend=addend;
         pendingEqus_.push_back(eq); return;
     }
     if (lhsSym&&rhsSym&&isSub) {
@@ -391,7 +382,7 @@ void Assembler::directiveEquExpr(const char* dest, const char* expr) {
             setConst(it1->second.value-it2->second.value); return;
         }
         mkstub(d); mkstub(lhs); mkstub(rhs);
-        PendingEqu eq; eq.dest=d; eq.src1=lhs; eq.src2=rhs; eq.addend=0; eq.isSub=true;
+        PendingEqu eq; eq.dest=d; eq.src1=lhs; eq.src2=rhs; eq.addend=0;
         pendingEqus_.push_back(eq); return;
     }
     fprintf(stderr,"Error: .equ %s – nepodržan izraz '%s'\n",dest,expr); exit(1);

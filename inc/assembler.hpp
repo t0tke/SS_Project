@@ -4,7 +4,6 @@
 #include <map>
 #include <cstdint>
 
-enum RelocType { R_ABS_32 = 0, R_PC_REL = 1 };
 enum BranchType { BR_BEQ = 1, BR_BNE = 2, BR_BGT = 3 }; // Usklađen enum sa .cpp
 
 struct Symbol {
@@ -29,7 +28,6 @@ struct PoolEntry {
 };
 
 struct SectionInfo {
-    std::string name;
     int lc;
     std::vector<uint8_t> data;
     std::vector<RelEntry> relocs;
@@ -39,7 +37,6 @@ struct SectionInfo {
 struct PendingEqu { 
     std::string dest, src1, src2; 
     int addend; 
-    bool isSub; 
 };
 
 class Assembler {
