@@ -54,6 +54,7 @@ public:
     void encodeHalt(); void encodeInt(); void encodeIret(); void encodeRet();
     void encodePush(const char* reg); void encodePop(const char* reg); void encodeNot(const char* reg);
     void encodeXchg(const char* rs, const char* rd);
+    void encodeAluRR(uint32_t opBase,const char* rs,const char* rd);
     void encodeAdd(const char* rs, const char* rd); void encodeSub(const char* rs, const char* rd);
     void encodeMul(const char* rs, const char* rd); void encodeDiv(const char* rs, const char* rd);
     void encodeAnd(const char* rs, const char* rd); void encodeOr(const char* rs, const char* rd);
@@ -91,11 +92,12 @@ private:
     int32_t parseLit(const char* s);
     bool isNumStr(const std::string& s);
     
+    void appendLE32(SectionInfo& sec, uint32_t value);
     void emit32(uint32_t w);
     void patch32(SectionInfo& sec, int off, uint32_t v);
     uint32_t read32(const SectionInfo& sec, int off);
     void ensureSymStub(const std::string& name);
-    int addToPool(const std::string& lit, int instrPos);
+    void addToPool(const std::string& lit, int instrPos);
     void flushPool(SectionInfo& sec);
     void flushCurrentPool();
     void addReloc(int off, const std::string& t, const std::string& sym, int addend);

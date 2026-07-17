@@ -25,7 +25,7 @@ int Assembler::assemble() {
     int ret = yyparse();
     fclose(yyin);
     if (ret != 0) { fprintf(stderr,"Error: parsiranje nije uspelo\n"); return 1; }
-    for (auto& kv : sections_) flushPool(kv.second);
+    flushCurrentPool();
     backpatch();
     writeOutput();
     return 0;
@@ -60,11 +60,16 @@ bool Assembler::isNumStr(const std::string& s) {
     char* e; strtol(s.c_str(),&e,0); return *e=='\0';
 }
 
-void Assembler::emit32(uint32_t w) {
-    SectionInfo& sec=curSec();
-    sec.data.push_back(w&0xFF); sec.data.push_back((w>>8)&0xFF);
-    sec.data.push_back((w>>16)&0xFF); sec.data.push_back((w>>24)&0xFF);
-    sec.lc+=4;
+void Assembler::appendLE32(SectionInfo& sec, uint32_t value) {
+    sec.data.push_back(static_cast<uint8_t>(value & 0xFF));
+    sec.data.push_back(static_cast<uint8_t>((value >> 8) & 0xFF));
+    sec.data.push_back(static_cast<uint8_t>((value >> 16) & 0xFF));
+    sec.data.push_back(static_cast<uint8_t>((value >> 24) & 0xFF));
+    sec.lc += 4;
+}
+
+void Assembler::emit32(uint32_t value) {
+    appendLE32(curSec(), value);
 }
 void Assembler::patch32(SectionInfo& sec, int off, uint32_t v) {
     sec.data[off]=(uint8_t)(v&0xFF); sec.data[off+1]=(uint8_t)((v>>8)&0xFF);
@@ -81,28 +86,25 @@ void Assembler::ensureSymStub(const std::string& name) {
     }
 }
 
-int Assembler::addToPool(const std::string& lit, int instrPos) {
+void Assembler::addToPool(const std::string& lit, int instrPos) {
     SectionInfo& sec=curSec();
     for (int i=0;i<(int)sec.pool.size();i++) {
-        if (sec.pool[i].value==lit) { sec.pool[i].instrPos.push_back(instrPos); return i; }
+        if (sec.pool[i].value==lit) { sec.pool[i].instrPos.push_back(instrPos); return; }
     }
     PoolEntry e; e.value=lit; e.instrPos.push_back(instrPos);
-    sec.pool.push_back(e); return (int)sec.pool.size()-1;
+    sec.pool.push_back(e);
 }
 void Assembler::flushPool(SectionInfo& sec) {
     for (auto& entry : sec.pool) {
         int slotPos=sec.lc;
         if (isNumStr(entry.value)) {
-            uint32_t v=(uint32_t)strtol(entry.value.c_str(),nullptr,0);
-            sec.data.push_back(v&0xFF); sec.data.push_back((v>>8)&0xFF);
-            sec.data.push_back((v>>16)&0xFF); sec.data.push_back((v>>24)&0xFF);
+            uint32_t v = (uint32_t)(strtol(entry.value.c_str(), nullptr, 0));
+            appendLE32(sec, v);
         } else {
-            sec.data.push_back(0); sec.data.push_back(0);
-            sec.data.push_back(0); sec.data.push_back(0);
+            appendLE32(sec, 0);
             RelEntry r; r.offset=slotPos; r.type="ABS_32"; r.symbol=entry.value; r.addend=0;
             sec.relocs.push_back(r);
         }
-        sec.lc+=4;
         for (int pos : entry.instrPos) {
             int disp=slotPos-(pos+4);
             if (disp<-2048||disp>2047) {
@@ -241,17 +243,13 @@ void Assembler::startSection(const char* name) {
     }
 }
 void Assembler::directiveWordLit(const char* numStr) {
-    int32_t v=parseLit(numStr);
-    SectionInfo& sec=curSec();
-    sec.data.push_back(v&0xFF); sec.data.push_back((v>>8)&0xFF);
-    sec.data.push_back((v>>16)&0xFF); sec.data.push_back((v>>24)&0xFF);
-    sec.lc+=4;
+    emit32((uint32_t)(parseLit(numStr)));
 }
 void Assembler::directiveWordSym(const char* symName) {
     std::string n(symName); ensureSymStub(n);
-    SectionInfo& sec=curSec(); int off=sec.lc;
-    sec.data.push_back(0); sec.data.push_back(0); sec.data.push_back(0); sec.data.push_back(0);
-    addReloc(off,"ABS_32",n,0); sec.lc+=4;
+    int off=lc();
+    emit32(0);
+    addReloc(off,"ABS_32",n,0);
 }
 void Assembler::directiveSkip(const char* numStr) {
     int n=(int)strtol(numStr,nullptr,0);
@@ -283,7 +281,7 @@ void Assembler::defineLabel(const char* name) {
     if (symtab_.count(sn)&&symtab_[sn].isDefined) {
         fprintf(stderr,"Error (linija %d): '%s' već definisan\n",yylineno,name); exit(1);
     }
-    if (curSection_.empty()) { ensureSymStub(sn); return; }
+    if (curSection_.empty()) { fprintf( stderr, "Error (linija %d): labela '%s' definisana van sekcije\n", yylineno, name); exit(1); }
     bool wasG=symtab_.count(sn)&&symtab_[sn].isGlobal;
     Symbol s; s.type="LABEL"; s.value=lc(); s.section=curSection_; s.isGlobal=wasG; s.isDefined=true;
     symtab_[sn]=s;
@@ -312,32 +310,45 @@ void Assembler::encodeNot(const char* reg) {
 void Assembler::encodeXchg(const char* rs, const char* rd) {
     emit32(0x40000000u|((regIdx(rd)&0xF)<<16)|((regIdx(rs)&0xF)<<12));
 }
+
+void Assembler::encodeAluRR(uint32_t opBase,const char* rs, const char* rd) {
+    int source = regIdx(rs);
+    int destination = regIdx(rd);
+
+    emit32(
+        opBase |
+        ((uint32_t)(destination & 0xF) << 20) |
+        ((uint32_t)(destination & 0xF) << 16) |
+        ((uint32_t)(source & 0xF) << 12)
+    );
+}
+
 void Assembler::encodeAdd(const char* rs, const char* rd) {
-    int s=regIdx(rs),d=regIdx(rd); emit32(0x50000000u|((d&0xF)<<20)|((d&0xF)<<16)|((s&0xF)<<12));
+    encodeAluRR(0x50000000u, rs, rd);
 }
 void Assembler::encodeSub(const char* rs, const char* rd) {
-    int s=regIdx(rs),d=regIdx(rd); emit32(0x51000000u|((d&0xF)<<20)|((d&0xF)<<16)|((s&0xF)<<12));
+    encodeAluRR(0x51000000u, rs, rd);
 }
 void Assembler::encodeMul(const char* rs, const char* rd) {
-    int s=regIdx(rs),d=regIdx(rd); emit32(0x52000000u|((d&0xF)<<20)|((d&0xF)<<16)|((s&0xF)<<12));
+    encodeAluRR(0x52000000u, rs, rd);
 }
 void Assembler::encodeDiv(const char* rs, const char* rd) {
-    int s=regIdx(rs),d=regIdx(rd); emit32(0x53000000u|((d&0xF)<<20)|((d&0xF)<<16)|((s&0xF)<<12));
+    encodeAluRR(0x53000000u, rs, rd);
 }
 void Assembler::encodeAnd(const char* rs, const char* rd) {
-    int s=regIdx(rs),d=regIdx(rd); emit32(0x61000000u|((d&0xF)<<20)|((d&0xF)<<16)|((s&0xF)<<12));
+    encodeAluRR(0x61000000u, rs, rd);
 }
-void Assembler::encodeOr (const char* rs, const char* rd) {
-    int s=regIdx(rs),d=regIdx(rd); emit32(0x62000000u|((d&0xF)<<20)|((d&0xF)<<16)|((s&0xF)<<12));
+void Assembler::encodeOr(const char* rs, const char* rd) {
+    encodeAluRR(0x62000000u, rs, rd);
 }
 void Assembler::encodeXor(const char* rs, const char* rd) {
-    int s=regIdx(rs),d=regIdx(rd); emit32(0x63000000u|((d&0xF)<<20)|((d&0xF)<<16)|((s&0xF)<<12));
+    encodeAluRR(0x63000000u, rs, rd);
 }
 void Assembler::encodeShl(const char* rs, const char* rd) {
-    int s=regIdx(rs),d=regIdx(rd); emit32(0x70000000u|((d&0xF)<<20)|((d&0xF)<<16)|((s&0xF)<<12));
+    encodeAluRR(0x70000000u, rs, rd);
 }
 void Assembler::encodeShr(const char* rs, const char* rd) {
-    int s=regIdx(rs),d=regIdx(rd); emit32(0x71000000u|((d&0xF)<<20)|((d&0xF)<<16)|((s&0xF)<<12));
+    encodeAluRR(0x71000000u, rs, rd);
 }
 
 // JMP/CALL: emit pool-instrukciju pa flush patch-uje pomeraj
