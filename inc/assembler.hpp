@@ -5,14 +5,23 @@
 #include <cstdint>
 
 enum BranchType { BR_BEQ = 1, BR_BNE = 2, BR_BGT = 3 }; // Usklađen enum sa .cpp
+enum class SymbolType { UND, LABEL, SECTION };
+
+const char* symTypeName(SymbolType t) {
+    switch (t) {
+        case SymbolType::LABEL:   return "LABEL";
+        case SymbolType::SECTION: return "SECTION";
+        default:                  return "UND";
+    }
+}
 
 struct Symbol {
-    std::string type;    // "LABEL", "SECTION", "UND"
-    int value;
+    SymbolType type; 
+    uint32_t value;      // ofset/adresa u 32-bitnom neoznačenom adresnom prostoru
     std::string section;
     bool isGlobal;
     bool isDefined;
-    Symbol() : type("UND"), value(0), section("UND"), isGlobal(false), isDefined(false) {}
+    Symbol() : type(SymbolType::UND), value(0), section("UND"), isGlobal(false), isDefined(false) {}
 };
 
 struct RelEntry { 

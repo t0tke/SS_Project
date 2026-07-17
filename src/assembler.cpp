@@ -76,7 +76,7 @@ uint32_t Assembler::read32(const SectionInfo& sec, int off) {
 }
 void Assembler::ensureSymStub(const std::string& name) {
     if (!symtab_.count(name)) {
-        Symbol s; s.type="UND"; s.value=0; s.section="UND"; s.isGlobal=false; s.isDefined=false;
+        Symbol s; s.type=SymbolType::UND; s.value=0; s.section="UND"; s.isGlobal=false; s.isDefined=false;
         symtab_[name]=s;
     }
 }
@@ -172,7 +172,7 @@ void Assembler::writeOutput() {
     for (auto& kv : symtab_) {
         if (!kv.first.empty()&&kv.first[0]=='.') continue;
         Symbol& sym=kv.second;
-        f<<std::left<<std::setw(20)<<kv.first<<std::setw(10)<<sym.type<<"0x"
+        f<<std::left<<std::setw(20)<<kv.first<<std::setw(10)<<symTypeName(sym.type)<<"0x"
          <<std::hex<<std::internal<<std::setw(8)<<std::setfill('0')<<sym.value
          <<std::left<<std::setfill(' ')<<"  "<<std::setw(16)<<sym.section<<(sym.isGlobal?"yes":"no")<<"\n";
     }
@@ -231,7 +231,7 @@ void Assembler::startSection(const char* name) {
     curSection_=std::string(name);
     if (!sections_.count(curSection_)) {
         SectionInfo sec; sec.lc=0; sections_[curSection_]=sec;
-        Symbol s; s.type="SECTION"; s.value=0; s.section=curSection_; s.isGlobal=false; s.isDefined=true;
+        Symbol s; s.type=SymbolType::SECTION; s.value=0; s.section=curSection_; s.isGlobal=false; s.isDefined=true;
         symtab_["."+curSection_]=s;
         sectionOrder_.push_back(curSection_);
     }
@@ -277,7 +277,7 @@ void Assembler::defineLabel(const char* name) {
     }
     if (curSection_.empty()) { fprintf( stderr, "Error (linija %d): labela '%s' definisana van sekcije\n", yylineno, name); exit(1); }
     bool wasG=symtab_.count(sn)&&symtab_[sn].isGlobal;
-    Symbol s; s.type="LABEL"; s.value=lc(); s.section=curSection_; s.isGlobal=wasG; s.isDefined=true;
+    Symbol s; s.type=SymbolType::LABEL; s.value=lc(); s.section=curSection_; s.isGlobal=wasG; s.isDefined=true;
     symtab_[sn]=s;
 }
 
