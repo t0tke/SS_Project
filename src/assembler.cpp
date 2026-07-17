@@ -158,64 +158,81 @@ void Assembler::writeOutput() {
     std::ofstream f(outFile_);
     if (!f) { fprintf(stderr,"Error: ne mogu '%s'\n",outFile_.c_str()); exit(1); }
 
-    f<<"#SYMTAB\n"<<std::left<<std::setw(20)<<"Name"<<std::setw(10)<<"Type"
-     <<std::setw(14)<<"Value"<<std::setw(16)<<"Section"<<"Global\n"<<std::string(63,'-')<<"\n";
+    // ===================== #SYMTAB =====================
+    // Kolone: Name  Type  Bind  Def  Section  Value
+    //   Type    = UND / LABEL / SECTION
+    //   Bind    = LOCAL / GLOBAL      (lokalni vs. globalni simbol)
+    //   Def     = yes / no           (definisan vs. nedefinisan/extern)
+    //   Section = ime sekcije, ili UND za nedefinisan simbol
+    //   Value   = ofset unutar sekcije (hex, 8 cifara); apsolutnu adresu daje tek linker
+    // Zapisi su razdvojeni belinama -> parser cita tokenizacijom, poravnanje je samo estetsko.
+    f << "#SYMTAB\n"
+      << std::left << std::setfill(' ')
+      << std::setw(20) << "Name"
+      << std::setw(9)  << "Type"
+      << std::setw(8)  << "Bind"
+      << std::setw(5)  << "Def"
+      << std::setw(18) << "Section"
+      << "Value\n"
+      << std::string(68, '-') << "\n";
+
+    auto emitSym = [&](const std::string& name, const Symbol& sym) {
+        f << std::left << std::setfill(' ')
+          << std::setw(20) << name
+          << std::setw(9)  << symTypeName(sym.type)
+          << std::setw(8)  << (sym.isGlobal  ? "GLOBAL" : "LOCAL")
+          << std::setw(5)  << (sym.isDefined ? "yes"    : "no")
+          << std::setw(18) << sym.section
+          << "0x" << std::hex << std::right << std::setw(8) << std::setfill('0') << sym.value
+          << std::dec << std::setfill(' ') << "\n";
+    };
+
+    // Prvo simboli sekcija, u redosledu definisanja sekcija (time se cuva redosled sekcija).
     for (auto& sectionName : sectionOrder_) {
-        auto& kv = *sections_.find(sectionName);
-        std::string key="."+kv.first;
-        if (!symtab_.count(key)) continue;
-        Symbol& sym=symtab_[key];
-        f<<std::left<<std::setw(20)<<key<<std::setw(10)<<"SECTION"<<"0x"
-         <<std::hex<<std::internal<<std::setw(8)<<std::setfill('0')<<sym.value
-         <<std::left<<std::setfill(' ')<<"  "<<std::setw(16)<<kv.first<<(sym.isGlobal?"yes":"no")<<"\n";
+        std::string key = "." + sectionName;
+        auto it = symtab_.find(key);
+        if (it != symtab_.end()) emitSym(key, it->second);
     }
+    // Zatim ostali simboli (labele, extern), po imenu (poredak std::map-a).
     for (auto& kv : symtab_) {
-        if (!kv.first.empty()&&kv.first[0]=='.') continue;
-        Symbol& sym=kv.second;
-        f<<std::left<<std::setw(20)<<kv.first<<std::setw(10)<<symTypeName(sym.type)<<"0x"
-         <<std::hex<<std::internal<<std::setw(8)<<std::setfill('0')<<sym.value
-         <<std::left<<std::setfill(' ')<<"  "<<std::setw(16)<<sym.section<<(sym.isGlobal?"yes":"no")<<"\n";
+        if (!kv.first.empty() && kv.first[0] == '.') continue;
+        emitSym(kv.first, kv.second);
     }
-    f<<"\n";
+    f << "\n";
+
+    // ============== Sekcije: sadrzaj + relokacije ==============
     for (auto& sectionName : sectionOrder_) {
-        auto& kv = *sections_.find(sectionName);
-        SectionInfo& sec=kv.second;
-        f<<"#SECTION "<<kv.first<<" size="<<std::dec<<sec.data.size()<<"\n";
-        for (size_t i=0;i<sec.data.size();i++) {
+        SectionInfo& sec = sections_.find(sectionName)->second;
+
+        // ----- sadrzaj sekcije: 16 bajtova po redu, little-endian, ofset kao 4 hex cifre -----
+        f << "#SECTION " << sectionName << " size=" << std::dec << sec.data.size() << "\n";
+        for (size_t i = 0; i < sec.data.size(); i++) {
             if (i % 16 == 0) {
                 if (i) f << "\n";
-                // Eksplicitno prekidamo std::left i uvodimo std::right za ispis adrese
                 f << std::hex << std::right << std::setw(4) << std::setfill('0') << i << ": ";
             }
-            // Sada se bajtovi garantovano ispisuju cisto
-            f<<std::hex<<std::setw(2)<<std::setfill('0')<<(unsigned)sec.data[i]<<" ";
+            f << std::hex << std::setw(2) << std::setfill('0') << (unsigned)sec.data[i] << " ";
         }
-        if (!sec.data.empty()) f<<"\n";
-        
-        // --- POPRAVLJEN DEO ZA ISPIS RELOKACIJA ---
+        if (!sec.data.empty()) f << "\n";
+        f << std::dec << std::setfill(' ');
+
+        // ----- relokacije: bez 'Type' kolone (sve su ABS_32), count= je samoprovera -----
         if (!sec.relocs.empty()) {
-            f << "#RELA " << kv.first << "\n";
-            
-            // Eksplicitno vracamo prazan prostor (' ') kao fill karakter pre ispisa zaglavlja
-            f << std::left << std::setfill(' ') 
-              << std::setw(12) << "Offset" 
-              << std::setw(10) << "Type"
-              << std::setw(22) << "Symbol" 
-              << "Addend\n" 
-              << std::string(52, '-') << "\n";
+            f << "#RELA " << sectionName << " count=" << std::dec << sec.relocs.size() << "\n"
+              << std::left << std::setfill(' ')
+              << std::setw(12) << "Offset"
+              << std::setw(22) << "Symbol"
+              << "Addend\n"
+              << std::string(40, '-') << "\n";
 
             for (auto& r : sec.relocs) {
-                // Prvo ispisujemo prefiks i formatiramo sam broj da ima tacno 8 heksadecimalnih cifara sa nulama na pocetku
-                f << "0x" << std::hex << std::internal << std::setw(8) << std::setfill('0') << r.offset;
-                
-                // Vracamo levo poravnanje i razmak za preostale kolone (Type, Symbol, Addend)
-                f << std::left << std::setfill(' ') 
-                  << "  " << std::setw(10) << r.type 
-                  << std::setw(22) << r.symbol 
-                  << std::dec << r.addend << "\n";
+                f << "0x" << std::hex << std::right << std::setw(8) << std::setfill('0') << r.offset
+                  << std::dec << std::setfill(' ')
+                  << "  " << std::left << std::setw(22) << r.symbol
+                  << r.addend << "\n";
             }
         }
-        f<<"\n";
+        f << "\n";
     }
 }
 

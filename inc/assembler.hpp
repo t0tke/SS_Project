@@ -7,13 +7,13 @@
 enum BranchType { BR_BEQ = 1, BR_BNE = 2, BR_BGT = 3 }; // Usklađen enum sa .cpp
 enum class SymbolType { UND, LABEL, SECTION };
 
-const char* symTypeName(SymbolType t) {
+inline const char* symTypeName(SymbolType t) {
     switch (t) {
         case SymbolType::LABEL:   return "LABEL";
         case SymbolType::SECTION: return "SECTION";
         default:                  return "UND";
     }
-}
+};
 
 struct Symbol {
     SymbolType type; 
