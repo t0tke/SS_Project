@@ -102,8 +102,7 @@ void Assembler::flushPool(SectionInfo& sec) {
             appendLE32(sec, v);
         } else {
             appendLE32(sec, 0);
-            RelEntry r; r.offset=slotPos; r.type="ABS_32"; r.symbol=entry.value; r.addend=0;
-            sec.relocs.push_back(r);
+            addReloc(sec,slotPos,"ABS_32",entry.value,0);
         }
         for (int pos : entry.instrPos) {
             int disp=slotPos-(pos+4);
@@ -119,9 +118,9 @@ void Assembler::flushPool(SectionInfo& sec) {
 }
 void Assembler::flushCurrentPool() { if (!curSection_.empty()) flushPool(sections_[curSection_]); }
 
-void Assembler::addReloc(int off, const std::string& t, const std::string& sym, int addend) {
+void Assembler::addReloc(SectionInfo& sec, int off, const std::string& t, const std::string& sym, int addend) {
     RelEntry r; r.offset=off; r.type=t; r.symbol=sym; r.addend=addend;
-    curSec().relocs.push_back(r);
+    sec.relocs.push_back(r);
 }
 
 /*
@@ -249,7 +248,7 @@ void Assembler::directiveWordSym(const char* symName) {
     std::string n(symName); ensureSymStub(n);
     int off=lc();
     emit32(0);
-    addReloc(off,"ABS_32",n,0);
+    addReloc(curSec(),off,"ABS_32",n,0);
 }
 void Assembler::directiveSkip(const char* numStr) {
     int n=(int)strtol(numStr,nullptr,0);
