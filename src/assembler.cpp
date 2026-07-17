@@ -39,17 +39,12 @@ SectionInfo& Assembler::curSec() {
 int Assembler::lc() { return curSection_.empty() ? 0 : sections_[curSection_].lc; }
 
 int Assembler::regIdx(const char* reg) {
-    const char* p = (*reg=='%') ? reg+1 : reg;
-    if (p[0]=='r') return atoi(p+1);
-    if (!strcmp(p,"sp")) return 14;
-    if (!strcmp(p,"pc")) return 15;
-    return 0;
+    return atoi(reg + 2);
 }
 int Assembler::csrIdx(const char* csr) {
-    const char* p = (*csr=='%') ? csr+1 : csr;
-    if (!strcmp(p,"status"))  return 0;
-    if (!strcmp(p,"handler")) return 1;
-    if (!strcmp(p,"cause"))   return 2;
+    if (!strcmp(csr,"status"))  return 0;
+    if (!strcmp(csr,"handler")) return 1;
+    if (!strcmp(csr,"cause"))   return 2;
     fprintf(stderr,"Error: nepoznat CSR '%s'\n",csr); exit(1);
 }
 int32_t Assembler::parseLit(const char* s) {
@@ -61,10 +56,10 @@ bool Assembler::isNumStr(const std::string& s) {
 }
 
 void Assembler::appendLE32(SectionInfo& sec, uint32_t value) {
-    sec.data.push_back(static_cast<uint8_t>(value & 0xFF));
-    sec.data.push_back(static_cast<uint8_t>((value >> 8) & 0xFF));
-    sec.data.push_back(static_cast<uint8_t>((value >> 16) & 0xFF));
-    sec.data.push_back(static_cast<uint8_t>((value >> 24) & 0xFF));
+    sec.data.push_back((uint8_t)(value & 0xFF));
+    sec.data.push_back((uint8_t)((value >> 8) & 0xFF));
+    sec.data.push_back((uint8_t)((value >> 16) & 0xFF));
+    sec.data.push_back((uint8_t)((value >> 24) & 0xFF));
     sec.lc += 4;
 }
 
@@ -118,8 +113,8 @@ void Assembler::flushPool(SectionInfo& sec) {
 }
 void Assembler::flushCurrentPool() { if (!curSection_.empty()) flushPool(sections_[curSection_]); }
 
-void Assembler::addReloc(SectionInfo& sec, int off, const std::string& t, const std::string& sym, int addend) {
-    RelEntry r; r.offset=off; r.type=t; r.symbol=sym; r.addend=addend;
+void Assembler::addReloc(SectionInfo& sec, int off, const std::string& type, const std::string& sym, int addend) {
+    RelEntry r; r.offset=off; r.type=type; r.symbol=sym; r.addend=addend;
     sec.relocs.push_back(r);
 }
 
@@ -301,7 +296,7 @@ void Assembler::encodePush(const char* reg) {
 }
 void Assembler::encodePop(const char* reg) {
     int r=regIdx(reg);
-    emit32(0x93000000u|((r&0xF)<<20)|(14<<16)|4);
+    emit32(0x930E0004u|((r&0xF)<<20));
 }
 void Assembler::encodeNot(const char* reg) {
     int r=regIdx(reg); emit32(0x60000000u|((r&0xF)<<20)|((r&0xF)<<16));
@@ -379,7 +374,7 @@ void Assembler::patchBranch(BranchType bt, const char* reg1, const char* reg2) {
 // LD operandi
 void Assembler::ldImmediateOp(const char* imm) {
     pendingLdNeedsDeref_ = false;
-    std::string val(imm); if (!val.empty()&&val[0]=='$') val=val.substr(1);
+    std::string val = std::string(imm).substr(1);
     if (isNumStr(val)) {
         int32_t v=(int32_t)strtol(val.c_str(),nullptr,0);
         if (v>=-2048&&v<=2047) {
