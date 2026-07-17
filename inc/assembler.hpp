@@ -7,7 +7,7 @@
 enum BranchType { BR_BEQ = 1, BR_BNE = 2, BR_BGT = 3 }; // Usklađen enum sa .cpp
 
 struct Symbol {
-    std::string type;    // "LABEL", "CONST", "SECTION", "UND"
+    std::string type;    // "LABEL", "SECTION", "UND"
     int value;
     std::string section;
     bool isGlobal;
@@ -34,11 +34,6 @@ struct SectionInfo {
     std::vector<PoolEntry> pool;
 };
 
-struct PendingEqu { 
-    std::string dest, src1, src2; 
-    int addend; 
-};
-
 class Assembler {
 public:
     Assembler(const std::string& inFile, const std::string& outFile);
@@ -52,7 +47,6 @@ public:
     void directiveWordSym(const char* symName);
     void directiveSkip(const char* numStr);
     void directiveAscii(const char* strTok);
-    void directiveEquExpr(const char* dest, const char* expr);
     void directiveEnd();
     void defineLabel(const char* name);
 
@@ -89,7 +83,6 @@ private:
     std::map<std::string, SectionInfo> sections_;
     std::vector<std::string> sectionOrder_;
     std::map<std::string, Symbol> symtab_;
-    std::vector<PendingEqu> pendingEqus_;
 
     SectionInfo& curSec();
     int lc();
@@ -106,7 +99,6 @@ private:
     void flushPool(SectionInfo& sec);
     void flushCurrentPool();
     void addReloc(int off, const std::string& t, const std::string& sym, int addend);
-    void resolveEqus();
     void backpatch();
     void writeOutput();
 };

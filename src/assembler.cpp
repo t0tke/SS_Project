@@ -26,7 +26,6 @@ int Assembler::assemble() {
     fclose(yyin);
     if (ret != 0) { fprintf(stderr,"Error: parsiranje nije uspelo\n"); return 1; }
     for (auto& kv : sections_) flushPool(kv.second);
-    resolveEqus();
     backpatch();
     writeOutput();
     return 0;
@@ -98,17 +97,10 @@ void Assembler::flushPool(SectionInfo& sec) {
             sec.data.push_back(v&0xFF); sec.data.push_back((v>>8)&0xFF);
             sec.data.push_back((v>>16)&0xFF); sec.data.push_back((v>>24)&0xFF);
         } else {
-            auto it=symtab_.find(entry.value);
-            if (it!=symtab_.end()&&it->second.type=="CONST"&&it->second.section=="ABS") {
-                uint32_t v=(uint32_t)it->second.value;
-                sec.data.push_back(v&0xFF); sec.data.push_back((v>>8)&0xFF);
-                sec.data.push_back((v>>16)&0xFF); sec.data.push_back((v>>24)&0xFF);
-            } else {
-                sec.data.push_back(0); sec.data.push_back(0);
-                sec.data.push_back(0); sec.data.push_back(0);
-                RelEntry r; r.offset=slotPos; r.type="ABS_32"; r.symbol=entry.value; r.addend=0;
-                sec.relocs.push_back(r);
-            }
+            sec.data.push_back(0); sec.data.push_back(0);
+            sec.data.push_back(0); sec.data.push_back(0);
+            RelEntry r; r.offset=slotPos; r.type="ABS_32"; r.symbol=entry.value; r.addend=0;
+            sec.relocs.push_back(r);
         }
         sec.lc+=4;
         for (int pos : entry.instrPos) {
@@ -130,47 +122,6 @@ void Assembler::addReloc(int off, const std::string& t, const std::string& sym, 
     curSec().relocs.push_back(r);
 }
 
-void Assembler::resolveEqus() {
-    bool progress=true;
-    while (progress&&!pendingEqus_.empty()) {
-        progress=false;
-        std::vector<PendingEqu> rem;
-        for (auto& eq : pendingEqus_) {
-            auto it1=symtab_.find(eq.src1);
-            if (it1==symtab_.end()||!it1->second.isDefined) { rem.push_back(eq); continue; }
-            Symbol s1=it1->second;
-            if (eq.src2.empty()) {
-                bool wasG=symtab_.count(eq.dest)&&symtab_[eq.dest].isGlobal;
-                Symbol& d=symtab_[eq.dest];
-                if (s1.type=="CONST"&&s1.section=="ABS") { 
-                    d.type="CONST"; d.value=s1.value+eq.addend; d.section="ABS";
-                    d.isGlobal=wasG||s1.isGlobal; d.isDefined=true;
-                } else if (s1.section!="UND") {
-                    d.type="LABEL"; d.value=s1.value+eq.addend; d.section=s1.section;
-                    d.isGlobal=wasG||s1.isGlobal; d.isDefined=true;
-                } else { rem.push_back(eq); continue; }
-            } else {
-                auto it2=symtab_.find(eq.src2);
-                if (it2==symtab_.end()||!it2->second.isDefined) { rem.push_back(eq); continue; }
-                Symbol s2=it2->second;
-                if (s1.section!=s2.section) {
-                    fprintf(stderr,"Error: .equ %s=%s-%s: različite sekcije\n",
-                            eq.dest.c_str(),eq.src1.c_str(),eq.src2.c_str()); exit(1);
-                }
-                bool wasG=symtab_.count(eq.dest)&&symtab_[eq.dest].isGlobal;
-                Symbol& d=symtab_[eq.dest];
-                d.type="CONST"; d.value=s1.value-s2.value+eq.addend;
-                d.section="ABS"; d.isGlobal=wasG; d.isDefined=true;
-            }
-            progress=true;
-        }
-        pendingEqus_=rem;
-    }
-    for (auto& eq : pendingEqus_)
-        fprintf(stderr,"Error: .equ '%s' nije razrešen\n",eq.dest.c_str());
-    if (!pendingEqus_.empty()) exit(1);
-}
-
 /*
 PC_REL grana u backpatch je potpuno mrtav kod jer:
 
@@ -186,10 +137,6 @@ void Assembler::backpatch() {
             auto it=symtab_.find(rel.symbol);
             if (it==symtab_.end()) { keep.push_back(rel); continue; }
             Symbol sym=it->second;
-            if (sym.type=="CONST"&&sym.section=="ABS") {
-                if (rel.type=="ABS_32") patch32(sec,rel.offset,(uint32_t)(sym.value+rel.addend));
-                continue;
-            }
             if (!sym.isGlobal&&sym.section==sn&&sym.isDefined) {
                 if (rel.type=="ABS_32") {
                     uint32_t v=(uint32_t)(sym.value+rel.addend);
@@ -329,64 +276,6 @@ void Assembler::directiveAscii(const char* strTok) {
         sec.lc++;
     }
 }
-void Assembler::directiveEquExpr(const char* dest, const char* expr) {
-    std::string d(dest), e(expr);
-    char op=0; size_t opPos=std::string::npos;
-    for (size_t i=1;i<e.size();i++) if (e[i]=='+'||e[i]=='-') { opPos=i; op=e[i]; break; }
-    std::string lhs=(opPos==std::string::npos)?e:e.substr(0,opPos);
-    std::string rhs=(opPos==std::string::npos)?"":e.substr(opPos+1);
-    bool isSub=(op=='-');
-    bool lhsNum=isNumStr(lhs), rhsNum=rhs.empty()||isNumStr(rhs);
-    bool rhsSym=!rhs.empty()&&!rhsNum, lhsSym=!lhsNum&&!lhs.empty();
-    bool wasG=symtab_.count(d)&&symtab_[d].isGlobal;
-
-    auto mkstub=[&](const std::string& nm){ ensureSymStub(nm); };
-    auto setConst=[&](int val) {
-        Symbol s; s.type="CONST"; s.value=val; s.section="ABS"; s.isGlobal=wasG; s.isDefined=true;
-        symtab_[d]=s;
-    };
-    auto setAlias=[&](Symbol& src, int addend) {
-        Symbol s;
-        if (src.type=="CONST"&&src.section=="ABS") { s.type="CONST"; s.value=src.value+addend; s.section="ABS"; }
-        else { s.type="LABEL"; s.value=src.value+addend; s.section=src.section; }
-        s.isGlobal=wasG||src.isGlobal; s.isDefined=true; symtab_[d]=s;
-    };
-
-    if (lhsNum&&(rhs.empty()||rhsNum)) {
-        int32_t v=(int32_t)strtol(lhs.c_str(),nullptr,0);
-        int32_t v2=rhs.empty()?0:(int32_t)strtol(rhs.c_str(),nullptr,0);
-        setConst(isSub?(v-v2):(v+v2)); return;
-    }
-    if (lhsSym&&(rhs.empty()||rhsNum)) {
-        int addend=rhs.empty()?0:(int)strtol(rhs.c_str(),nullptr,0); if (isSub) addend=-addend;
-        auto it=symtab_.find(lhs);
-        if (it!=symtab_.end()&&it->second.isDefined) { setAlias(it->second,addend); return; }
-        mkstub(d); mkstub(lhs);
-        PendingEqu eq; eq.dest=d; eq.src1=lhs; eq.src2=""; eq.addend=addend; 
-        pendingEqus_.push_back(eq); return;
-    }
-    if (lhsNum&&rhsSym) {
-        int addend=(int)strtol(lhs.c_str(),nullptr,0);
-        auto it=symtab_.find(rhs);
-        if (it!=symtab_.end()&&it->second.isDefined) { setAlias(it->second,addend); return; }
-        mkstub(d); mkstub(rhs);
-        PendingEqu eq; eq.dest=d; eq.src1=rhs; eq.src2=""; eq.addend=addend;
-        pendingEqus_.push_back(eq); return;
-    }
-    if (lhsSym&&rhsSym&&isSub) {
-        auto it1=symtab_.find(lhs), it2=symtab_.find(rhs);
-        if (it1!=symtab_.end()&&it1->second.isDefined&&it2!=symtab_.end()&&it2->second.isDefined) {
-            if (it1->second.section!=it2->second.section) {
-                fprintf(stderr,"Error: .equ %s=%s-%s: različite sekcije\n",d.c_str(),lhs.c_str(),rhs.c_str()); exit(1);
-            }
-            setConst(it1->second.value-it2->second.value); return;
-        }
-        mkstub(d); mkstub(lhs); mkstub(rhs);
-        PendingEqu eq; eq.dest=d; eq.src1=lhs; eq.src2=rhs; eq.addend=0;
-        pendingEqus_.push_back(eq); return;
-    }
-    fprintf(stderr,"Error: .equ %s – nepodržan izraz '%s'\n",dest,expr); exit(1);
-}
 void Assembler::directiveEnd() { flushCurrentPool(); }
 
 void Assembler::defineLabel(const char* name) {
@@ -514,25 +403,12 @@ void Assembler::ldMemRegLitOp(const char* reg, const char* numStr) {
     pendingNeedsPool_=false; pendingLdNeedsDeref_ = false;
 }
 void Assembler::ldMemRegSymOp(const char* reg, const char* sym) {
-    int r = regIdx(reg); std::string n(sym);
-    auto it = symtab_.find(n);
-    if (it == symtab_.end() ||
-        !it->second.isDefined ||
-        it->second.type != "CONST" ||
-        it->second.section != "ABS") {
-        fprintf(stderr,"Error (linija %d): simbol '%s' u [%%reg + simbol] mora biti poznata ABS konstanta u trenutku asembliranja\n",yylineno, sym);
-        exit(1);
-    }
-
-    int32_t v = (int32_t)it->second.value;
-    if (v < -2048 || v > 2047) {
-        fprintf(stderr,"Error (linija %d): vrednost simbola '%s' ne staje u 12-bit signed pomeraj\n",yylineno, sym);
-        exit(1);
-    }
-    // ld [%reg + simbol], %rd
-    // gpr[rd] <= mem32[gpr[reg] + gpr[0] + D]
-    pendingInstr_ =0x92000000u | ((uint32_t)(r & 0xF) << 16) | ((uint32_t)v & 0xFFFu);
-    pendingNeedsPool_ = false; pendingLdNeedsDeref_ = false;
+    // Konacna vrednost simbola nije poznata u trenutku asembliranja
+    // (labele su relativne u odnosu na sekciju, extern simboli nedefinisani),
+    // pa je [%reg + simbol] po postavci uvek greska u procesu asembliranja.
+    (void)reg;
+    fprintf(stderr,"Error (linija %d): konacna vrednost simbola '%s' u [%%reg + simbol] nije poznata u trenutku asembliranja\n",yylineno, sym);
+    exit(1);
 }
 
 void Assembler::finalizeLD(const char* rd) {
@@ -569,25 +445,11 @@ void Assembler::stMemRegLitOp(const char* reg, const char* numStr) {
     pendingNeedsPool_=false; 
 }
 void Assembler::stMemRegSymOp(const char* reg, const char* sym) {
-    int r = regIdx(reg);
-    std::string n(sym);
-
-    auto it = symtab_.find(n);
-
-    if (it == symtab_.end() || !it->second.isDefined || it->second.type != "CONST" || it->second.section != "ABS") {
-        fprintf(stderr, "Error (linija %d): simbol '%s' u [%%reg + simbol] mora biti poznata ABS konstanta u trenutku asembliranja\n", yylineno, sym);
-        exit(1);
-    }
-
-    int32_t disp = (int32_t)it->second.value;
-
-    if (disp < -2048 || disp > 2047) {
-        fprintf(stderr, "Error (linija %d): vrednost simbola '%s' ne staje u 12-bit signed pomeraj\n", yylineno, sym);
-        exit(1);
-    }
-
-    pendingInstr_ = 0x80000000u | ((uint32_t)(r & 0xF) << 20) | ((uint32_t)disp & 0xFFFu);
-    pendingNeedsPool_ = false; 
+    // Isto kao kod ld: konacna vrednost simbola nije poznata u trenutku
+    // asembliranja, pa je [%reg + simbol] po postavci uvek greska.
+    (void)reg;
+    fprintf(stderr, "Error (linija %d): konacna vrednost simbola '%s' u [%%reg + simbol] nije poznata u trenutku asembliranja\n", yylineno, sym);
+    exit(1);
 }
 void Assembler::finalizeST(const char* rs) {
     int r=regIdx(rs);

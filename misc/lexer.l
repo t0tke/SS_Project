@@ -23,7 +23,6 @@
 ".word"                     { return DOT_WORD;    }
 ".skip"                     { return DOT_SKIP;    }
 ".ascii"                    { return DOT_ASCII;   }
-".equ"                      { return DOT_EQU;     }
 ".end"                      { return DOT_END;     }
 
 "halt"                      { return HALT;  }
@@ -77,7 +76,6 @@
 "["                         { return LBRACKET; }
 "]"                         { return RBRACKET; }
 "+"                         { return PLUS;     }
-"-"                         { return MINUS;    }
 
 .   { fprintf(stderr, "[Lekser] Greska u liniji %d: neprepoznat karakter '%s'\n", yylineno, yytext); return INVALID; }
 

@@ -30,8 +30,8 @@ extern Assembler* gAssembler;
 %token AND OR XOR SHL SHR
 %token LD ST CSRRD CSRWR
 %token DOT_GLOBAL DOT_EXTERN DOT_SECTION
-%token DOT_WORD DOT_SKIP DOT_ASCII DOT_EQU DOT_END
-%token COLON COMMA LBRACKET RBRACKET PLUS MINUS
+%token DOT_WORD DOT_SKIP DOT_ASCII DOT_END
+%token COLON COMMA LBRACKET RBRACKET PLUS
 
 %token <str> REGISTER
 %token <str> CSR
@@ -39,8 +39,6 @@ extern Assembler* gAssembler;
 %token <str> NUMBER
 %token <str> SYMBOL
 %token <str> STRING
-
-%type <str> equ_expr
 
 %%
 
@@ -73,7 +71,6 @@ directive:
     | DOT_WORD    init_list
     | DOT_SKIP    NUMBER           { gAssembler->directiveSkip($2); free($2); }
     | DOT_ASCII   STRING           { gAssembler->directiveAscii($2); free($2); }
-    | DOT_EQU SYMBOL COMMA equ_expr { gAssembler->directiveEquExpr($2, $4); free($2); free($4); }
     | DOT_END                      { gAssembler->directiveEnd(); YYACCEPT; }
     ;
 
@@ -150,68 +147,6 @@ st_op:
     | LBRACKET REGISTER RBRACKET             { gAssembler->stMemRegOp($2); free($2); }
     | LBRACKET REGISTER PLUS NUMBER RBRACKET { gAssembler->stMemRegLitOp($2, $4); free($2); free($4); }
     | LBRACKET REGISTER PLUS SYMBOL RBRACKET { gAssembler->stMemRegSymOp($2, $4); free($2); free($4); }
-    ;
-
-/* ================================================
-   IZRAZ ZA .equ - pokriva sve razumne kombinacije:
-     literal              "5" ili "0xFF"
-     simbol               "foo"
-     simbol + literal     "foo+5"
-     simbol - literal     "foo-5"
-     literal + simbol     "5+foo"
-     simbol - simbol      "end-start"  <- nivo C primer
-     literal + literal    "2+3"
-     literal - literal    "8-3"
-   Vrednost se prenosi kao string, asembler je evaluira.
-   ================================================ */
-
-equ_expr:
-      NUMBER
-        { $$ = strdup($1); free($1); }
-    | SYMBOL
-        { $$ = strdup($1); free($1); }
-    | SYMBOL PLUS NUMBER
-        {
-            int len = strlen($1) + strlen($3) + 4;
-            $$ = (char*)malloc(len);
-            snprintf($$, len, "%s+%s", $1, $3);
-            free($1); free($3);
-        }
-    | SYMBOL MINUS NUMBER
-        {
-            int len = strlen($1) + strlen($3) + 4;
-            $$ = (char*)malloc(len);
-            snprintf($$, len, "%s-%s", $1, $3);
-            free($1); free($3);
-        }
-    | NUMBER PLUS SYMBOL
-        {
-            int len = strlen($1) + strlen($3) + 4;
-            $$ = (char*)malloc(len);
-            snprintf($$, len, "%s+%s", $1, $3);
-            free($1); free($3);
-        }
-    | SYMBOL MINUS SYMBOL
-        {
-            int len = strlen($1) + strlen($3) + 4;
-            $$ = (char*)malloc(len);
-            snprintf($$, len, "%s-%s", $1, $3);
-            free($1); free($3);
-        }
-    | NUMBER PLUS NUMBER
-        {
-            int len = strlen($1) + strlen($3) + 4;
-            $$ = (char*)malloc(len);
-            snprintf($$, len, "%s+%s", $1, $3);
-            free($1); free($3);
-        }
-    | NUMBER MINUS NUMBER
-        {
-            int len = strlen($1) + strlen($3) + 4;
-            $$ = (char*)malloc(len);
-            snprintf($$, len, "%s-%s", $1, $3);
-            free($1); free($3);
-        }
     ;
 
 %%
