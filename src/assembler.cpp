@@ -1,5 +1,6 @@
 // assembler.cpp – SS 2025/2026
 #include "assembler.hpp"
+#include "objfile.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -27,7 +28,8 @@ int Assembler::assemble() {
     if (ret != 0) { fprintf(stderr,"Error: parsiranje nije uspelo\n"); return 1; }
     flushCurrentPool();
     backpatch();
-    writeOutput();
+    writeBinaryOutput(outFile_);            // handler.o        (binarni predmetni fajl)
+    writeTextOutput(outFile_ + ".txt");     // handler.o.txt    (čitljiv prikaz)
     return 0;
 }
 
@@ -154,86 +156,42 @@ void Assembler::backpatch() {
     }
 }
 
-void Assembler::writeOutput() {
-    std::ofstream f(outFile_);
-    if (!f) { fprintf(stderr,"Error: ne mogu '%s'\n",outFile_.c_str()); exit(1); }
-
-    // ===================== #SYMTAB =====================
-    // Kolone: Name  Type  Bind  Def  Section  Value
-    //   Type    = UND / LABEL / SECTION
-    //   Bind    = LOCAL / GLOBAL      (lokalni vs. globalni simbol)
-    //   Def     = yes / no           (definisan vs. nedefinisan/extern)
-    //   Section = ime sekcije, ili UND za nedefinisan simbol
-    //   Value   = ofset unutar sekcije (hex, 8 cifara); apsolutnu adresu daje tek linker
-    // Zapisi su razdvojeni belinama -> parser cita tokenizacijom, poravnanje je samo estetsko.
-    f << "#SYMTAB\n"
-      << std::left << std::setfill(' ')
-      << std::setw(20) << "Name"
-      << std::setw(9)  << "Type"
-      << std::setw(8)  << "Bind"
-      << std::setw(5)  << "Def"
-      << std::setw(18) << "Section"
-      << "Value\n"
-      << std::string(68, '-') << "\n";
-
-    auto emitSym = [&](const std::string& name, const Symbol& sym) {
-        f << std::left << std::setfill(' ')
-          << std::setw(20) << name
-          << std::setw(9)  << symTypeName(sym.type)
-          << std::setw(8)  << (sym.isGlobal  ? "GLOBAL" : "LOCAL")
-          << std::setw(5)  << (sym.isDefined ? "yes"    : "no")
-          << std::setw(18) << sym.section
-          << "0x" << std::hex << std::right << std::setw(8) << std::setfill('0') << sym.value
-          << std::dec << std::setfill(' ') << "\n";
-    };
-
-    // Prvo simboli sekcija, u redosledu definisanja sekcija (time se cuva redosled sekcija).
+// Sastavi neutralan model predmetnog fajla iz internog stanja asemblera.
+// Model je isti oblik koji čita i reader, pa je round-trip provera diff teksta.
+ObjectModel Assembler::buildModel() const {
+    ObjectModel m;
+    m.sectionOrder = sectionOrder_;
+    m.symtab       = symtab_;
     for (auto& sectionName : sectionOrder_) {
-        std::string key = "." + sectionName;
-        auto it = symtab_.find(key);
-        if (it != symtab_.end()) emitSym(key, it->second);
-    }
-    // Zatim ostali simboli (labele, extern), po imenu (poredak std::map-a).
-    for (auto& kv : symtab_) {
-        if (!kv.first.empty() && kv.first[0] == '.') continue;
-        emitSym(kv.first, kv.second);
-    }
-    f << "\n";
-
-    // ============== Sekcije: sadrzaj + relokacije ==============
-    for (auto& sectionName : sectionOrder_) {
-        SectionInfo& sec = sections_.find(sectionName)->second;
-
-        // ----- sadrzaj sekcije: 16 bajtova po redu, little-endian, ofset kao 4 hex cifre -----
-        f << "#SECTION " << sectionName << " size=" << std::dec << sec.data.size() << "\n";
-        for (size_t i = 0; i < sec.data.size(); i++) {
-            if (i % 16 == 0) {
-                if (i) f << "\n";
-                f << std::hex << std::right << std::setw(4) << std::setfill('0') << i << ": ";
-            }
-            f << std::hex << std::setw(2) << std::setfill('0') << (unsigned)sec.data[i] << " ";
+        auto it = sections_.find(sectionName);
+        if (it == sections_.end()) continue;
+        const SectionInfo& sec = it->second;
+        ObjSectionData sd;
+        sd.data = sec.data;
+        for (auto& r : sec.relocs) {
+            ObjReloc rr;
+            rr.offset = (uint32_t)r.offset;
+            rr.symbol = r.symbol;
+            rr.addend = (int32_t)r.addend;   // tip se ne čuva – sve su ABS_32
+            sd.relocs.push_back(rr);
         }
-        if (!sec.data.empty()) f << "\n";
-        f << std::dec << std::setfill(' ');
-
-        // ----- relokacije: bez 'Type' kolone (sve su ABS_32), count= je samoprovera -----
-        if (!sec.relocs.empty()) {
-            f << "#RELA " << sectionName << " count=" << std::dec << sec.relocs.size() << "\n"
-              << std::left << std::setfill(' ')
-              << std::setw(12) << "Offset"
-              << std::setw(22) << "Symbol"
-              << "Addend\n"
-              << std::string(40, '-') << "\n";
-
-            for (auto& r : sec.relocs) {
-                f << "0x" << std::hex << std::right << std::setw(8) << std::setfill('0') << r.offset
-                  << std::dec << std::setfill(' ')
-                  << "  " << std::left << std::setw(22) << r.symbol
-                  << r.addend << "\n";
-            }
-        }
-        f << "\n";
+        m.sections[sectionName] = std::move(sd);
     }
+    return m;
+}
+
+// Binarni predmetni fajl (sopstveni format "SSOB"), otvoren u binarnom modu.
+void Assembler::writeBinaryOutput(const std::string& path) {
+    std::ofstream f(path, std::ios::binary);
+    if (!f) { fprintf(stderr,"Error: ne mogu '%s'\n",path.c_str()); exit(1); }
+    objWriteBinary(f, buildModel());
+}
+
+// Čitljivi tekstualni prikaz istog predmetnog fajla.
+void Assembler::writeTextOutput(const std::string& path) {
+    std::ofstream f(path);
+    if (!f) { fprintf(stderr,"Error: ne mogu '%s'\n",path.c_str()); exit(1); }
+    objWriteText(f, buildModel());
 }
 
 // ===== Direktive =====

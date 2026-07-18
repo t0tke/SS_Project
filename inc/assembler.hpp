@@ -43,6 +43,8 @@ struct SectionInfo {
     std::vector<PoolEntry> pool;
 };
 
+struct ObjectModel; // definisan u objfile.hpp (neutralni model predmetnog fajla)
+
 class Assembler {
 public:
     Assembler(const std::string& inFile, const std::string& outFile);
@@ -111,5 +113,9 @@ private:
     void flushCurrentPool();
     void addReloc(SectionInfo& sec, int off, const std::string& t, const std::string& sym, int addend);
     void backpatch();
-    void writeOutput();
+
+    // Predmetni fajl: binarni ("-o" fajl) + čitljivi tekstualni prikaz.
+    ObjectModel buildModel() const;
+    void writeBinaryOutput(const std::string& path);
+    void writeTextOutput(const std::string& path);
 };

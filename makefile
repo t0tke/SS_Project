@@ -11,13 +11,20 @@ CXXFLAGS = -Wall -Wextra -std=c++17 -g -I$(INC_DIR)
 BISON = bison
 FLEX = flex
 
-SRCS = $(SRC_DIR)/assembler.cpp $(SRC_DIR)/parser.cpp $(SRC_DIR)/lexer.cpp
+SRCS = $(SRC_DIR)/assembler.cpp $(SRC_DIR)/objfile.cpp $(SRC_DIR)/parser.cpp $(SRC_DIR)/lexer.cpp
 OBJS = $(SRCS:$(SRC_DIR)/%.cpp=$(OBJ_DIR)/%.o)
 
-all: $(TARGET)
+# Pomoćni alat za round-trip proveru binarnog predmetnog fajla.
+READER = objreader
+READER_OBJS = $(OBJ_DIR)/objreader.o $(OBJ_DIR)/objfile.o
+
+all: $(TARGET) $(READER)
 
 $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) -o $(TARGET) $(OBJS)
+
+$(READER): $(READER_OBJS)
+	$(CXX) $(CXXFLAGS) -o $(READER) $(READER_OBJS)
 
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp | $(OBJ_DIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
@@ -32,9 +39,9 @@ $(OBJ_DIR):
 	mkdir -p $(OBJ_DIR)
 
 clean:
-	rm -rf $(OBJ_DIR) $(TARGET)
+	rm -rf $(OBJ_DIR) $(TARGET) $(READER)
 	rm -f $(SRC_DIR)/parser.cpp $(INC_DIR)/parser.hpp $(SRC_DIR)/lexer.cpp
-	rm -f *.o *.hex
+	rm -f *.o *.o.txt *.hex
 
 testa: $(TARGET)
 	@echo "--- Nivo A ---"
