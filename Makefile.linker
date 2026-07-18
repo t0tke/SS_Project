@@ -7,7 +7,7 @@ OBJ_DIR = obj_linker
 CXX = g++
 CXXFLAGS = -Wall -Wextra -std=c++17 -g -I$(INC_DIR)
 
-SRCS = $(SRC_DIR)/linker.cpp
+SRCS = $(SRC_DIR)/linker.cpp $(SRC_DIR)/objfile.cpp
 OBJS = $(SRCS:$(SRC_DIR)/%.cpp=$(OBJ_DIR)/%.o)
 
 all: $(TARGET)
@@ -15,7 +15,7 @@ all: $(TARGET)
 $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) -o $(TARGET) $(OBJS)
 
-$(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp $(INC_DIR)/linker.hpp | $(OBJ_DIR)
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp $(INC_DIR)/linker.hpp $(INC_DIR)/objfile.hpp $(INC_DIR)/assembler.hpp | $(OBJ_DIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(OBJ_DIR):

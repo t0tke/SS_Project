@@ -1,458 +1,353 @@
-// linker.cpp – SS 2025/2026 – Linker
-// Parses assembler .o output, merges sections, resolves symbols, applies relocations.
+// linker.cpp – SS 2025/2026 – Linker (nivo B)
+//
+// Učitava sopstveni binarni SSOB predmetni format preko zajedničkog
+// objektnog modela (objfile.hpp), agregira istoimene sekcije, razrešava
+// simbole i relokacije i generiše izlaz u -hex ili -relocatable režimu.
+//
+// Tok rada (run): najpre se UČITAJU I VALIDIRAJU svi ulazni fajlovi; tek
+// potom se formiraju agregirane sekcije, tabela simbola i relokacije, pa
+// se izvršava povezivanje.
 
 #include "linker.hpp"
 #include <fstream>
-#include <sstream>
 #include <iostream>
 #include <iomanip>
 #include <algorithm>
-#include <cstring>
 #include <cstdlib>
+#include <cstring>
+#include <cerrno>
 #include <set>
 
 // ======================================================================
-//  Argument parsing
+//  Argumenti komandne linije
 // ======================================================================
-
 bool Linker::parseArgs(int argc, char* argv[]) {
-    hexMode_   = false;
-    relocMode_ = false;
-    outFile_   = "a.out";
-
     for (int i = 1; i < argc; i++) {
         std::string arg(argv[i]);
 
-        if (arg == "-o" && i + 1 < argc) {
-            outFile_ = argv[++i];
+        if (arg == "-o") {
+            if (i + 1 >= argc) { std::cerr << "Error: -o zahteva naziv izlazne datoteke\n"; return false; }
+            outFile_ = argv[++i]; haveOut_ = true;
         }
-        else if (arg == "-hex") {
-            hexMode_ = true;
-        }
-        else if (arg == "-relocatable") {
-            relocMode_ = true;
-        }
-        else if (arg.rfind("-place=", 0) == 0 || arg.rfind("--place=", 0) == 0) {
-            size_t eq  = arg.find('=');
-            std::string rest = arg.substr(eq + 1);
+        else if (arg == "-hex")        { hexMode_ = true; }
+        else if (arg == "-relocatable"){ relocMode_ = true; }
+        else if (arg.rfind("-place=", 0) == 0) {
+            std::string rest = arg.substr(std::string("-place=").size());
             size_t at = rest.find('@');
             if (at == std::string::npos) {
-                std::cerr << "Error: neispravan -place format: " << arg << "\n";
+                std::cerr << "Error: neispravan -place format (očekivano -place=sekcija@adresa): " << arg << "\n";
                 return false;
             }
             std::string secName = rest.substr(0, at);
             std::string addrStr = rest.substr(at + 1);
-            uint32_t addr = (uint32_t)strtoul(addrStr.c_str(), nullptr, 0);
-            placeMap_[secName] = addr;
+            if (secName.empty() || addrStr.empty()) {
+                std::cerr << "Error: neispravan -place format: " << arg << "\n"; return false;
+            }
+            // Stroga validacija adrese: mora biti ceo broj, bez viška znakova,
+            // bez negativnog predznaka i mora da stane u 32 bita.
+            errno = 0;
+            char* endp = nullptr;
+            unsigned long long v = strtoull(addrStr.c_str(), &endp, 0);
+            if (endp == addrStr.c_str() || *endp != '\0' ||
+                addrStr[0] == '-' || addrStr[0] == '+') {
+                std::cerr << "Error: neispravna -place adresa '" << addrStr << "' za sekciju '" << secName << "'\n";
+                return false;
+            }
+            if (errno == ERANGE || v > 0xFFFFFFFFull) {
+                std::cerr << "Error: -place adresa '" << addrStr << "' za sekciju '" << secName
+                          << "' prelazi 32-bitni adresni prostor\n";
+                return false;
+            }
+            if (placeMap_.count(secName)) {
+                std::cerr << "Error: duplirani -place za sekciju '" << secName << "'\n";
+                return false;
+            }
+            placeMap_[secName] = (uint32_t)v;
+        }
+        else if (!arg.empty() && arg[0] == '-') {
+            std::cerr << "Error: nepoznata opcija '" << arg << "'\n"; return false;
         }
         else {
             inputFiles_.push_back(arg);
         }
     }
 
-    if (!hexMode_ && !relocMode_) {
-        std::cerr << "Error: mora se navesti -hex ili -relocatable\n";
-        return false;
-    }
+    // Tačno jedna od -hex / -relocatable je obavezna.
     if (hexMode_ && relocMode_) {
-        std::cerr << "Error: ne mogu obe opcije -hex i -relocatable istovremeno\n";
-        return false;
+        std::cerr << "Error: navesti tačno jednu od opcija -hex i -relocatable (navedene obe)\n"; return false;
+    }
+    if (!hexMode_ && !relocMode_) {
+        std::cerr << "Error: navesti tačno jednu od opcija -hex i -relocatable (nijedna nije navedena)\n"; return false;
     }
     if (inputFiles_.empty()) {
-        std::cerr << "Error: nema ulaznih datoteka\n";
-        return false;
+        std::cerr << "Error: nema ulaznih predmetnih datoteka\n"; return false;
     }
+    if (!haveOut_) outFile_ = hexMode_ ? "out.hex" : "out.o";
     return true;
 }
 
 // ======================================================================
-//  .o file loader  (text ELF-like format)
+//  Učitavanje jednog SSOB predmetnog fajla + validacija
 // ======================================================================
-
 bool Linker::loadObject(const std::string& filename) {
-    std::ifstream f(filename);
-    if (!f.is_open()) {
-        std::cerr << "Error: ne mogu otvoriti '" << filename << "'\n";
+    std::ifstream f(filename, std::ios::binary);
+    if (!f) { std::cerr << "Error: ne mogu da otvorim '" << filename << "'\n"; return false; }
+
+    LoadedObject obj;
+    obj.filename = filename;
+    if (!objReadBinary(f, obj.model)) {
+        std::cerr << "Error: '" << filename << "' nije validan SSOB predmetni fajl\n";
         return false;
     }
-
-    ObjectFile obj;
-    obj.filename = filename;
-
-    enum State { NONE, SYMTAB, SECDATA, RELA } state = NONE;
-    std::string curSec;
-    std::string line;
-    std::map<std::string, uint32_t> expectedSizes;
-
-    while (std::getline(f, line)) {
-        // trim trailing whitespace / CR
-        while (!line.empty() &&
-               (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
-            line.pop_back();
-
-        if (line.empty()) continue;
-
-        // ---- state transitions ----
-        if (line == "#SYMTAB") { state = SYMTAB; continue; }
-
-        if (line.substr(0, 8) == "#SECTION") {
-            state = SECDATA;
-            std::istringstream iss(line);
-            std::string tag, name, sizeField;
-            iss >> tag >> name >> sizeField;       // "#SECTION" "my_handler" "size=104"
-            curSec = name;
-            if (!obj.sections.count(curSec)) {
-                ObjSection sec; sec.name = curSec;
-                obj.sections[curSec] = sec;
-                obj.sectionOrder.push_back(curSec);
-            }
-            // Parse expected size
-            size_t eqPos = sizeField.find('=');
-            if (eqPos != std::string::npos)
-                expectedSizes[curSec] =
-                    (uint32_t)strtoul(sizeField.substr(eqPos + 1).c_str(), nullptr, 10);
-            continue;
-        }
-
-        if (line.substr(0, 5) == "#RELA") {
-            state = RELA;
-            std::istringstream iss(line);
-            std::string tag;
-            iss >> tag >> curSec;                   // "#RELA" "my_handler"
-            continue;
-        }
-
-        // ---- skip header / separator lines ----
-        if (line.find("Name") != std::string::npos &&
-            line.find("Type") != std::string::npos &&
-            line.find("Value") != std::string::npos)
-            continue;
-
-        if (line.find("Offset") != std::string::npos &&
-            line.find("Type") != std::string::npos &&
-            line.find("Symbol") != std::string::npos)
-            continue;
-
-        if (!line.empty() && line[0] == '-' && line.find_first_not_of('-') == std::string::npos)
-            continue;
-
-        // ---- parse depending on state ----
-        switch (state) {
-
-        case SYMTAB: {
-            std::istringstream iss(line);
-            std::string name, type, valStr, section, globalStr;
-            if (!(iss >> name >> type >> valStr >> section >> globalStr)) break;
-
-            ObjSymbol sym;
-            sym.name     = name;
-            sym.type     = type;
-            sym.value    = (uint32_t)strtoul(valStr.c_str(), nullptr, 0);
-            sym.section  = section;
-            sym.isGlobal = (globalStr == "yes");
-            obj.symbols[name] = sym;
-            break;
-        }
-
-        case SECDATA: {
-            size_t colon = line.find(':');
-            if (colon == std::string::npos) break;
-            std::istringstream iss(line.substr(colon + 1));
-            std::string tok;
-            while (iss >> tok)
-                obj.sections[curSec].data.push_back(
-                    (uint8_t)strtoul(tok.c_str(), nullptr, 16));
-            break;
-        }
-
-        case RELA: {
-            std::istringstream iss(line);
-            std::string offStr, type, symbol;
-            int32_t addend = 0;
-            if (!(iss >> offStr >> type >> symbol >> addend)) break;
-
-            ObjReloc rel;
-            rel.offset = (uint32_t)strtoul(offStr.c_str(), nullptr, 0);
-            rel.type   = type;
-            rel.symbol = symbol;
-            rel.addend = addend;
-            obj.sections[curSec].relocs.push_back(rel);
-            break;
-        }
-
-        default: break;
-        }
-    }
-
-    // Verify section sizes match declared size=N
-    for (auto& secKV : obj.sections) {
-        auto it = expectedSizes.find(secKV.first);
-        if (it != expectedSizes.end() &&
-            it->second != (uint32_t)secKV.second.data.size()) {
-            std::cerr << "Error: sekcija '" << secKV.first << "' u '"
-                      << filename << "': deklarisano " << it->second
-                      << " bajtova, procitano "
-                      << secKV.second.data.size() << "\n";
-            return false;
-        }
-    }
-
+    if (!validateObject(obj)) return false;     // poruka je već ispisana
     objects_.push_back(std::move(obj));
     return true;
 }
 
-// ======================================================================
-//  Merge same-named sections from all objects
-// ======================================================================
+// Strukturna provera učitanog modela (pre bilo kakvog povezivanja).
+bool Linker::validateObject(const LoadedObject& obj) {
+    const ObjectModel& m = obj.model;
 
-void Linker::mergeSections() {
-    // 1. Determine unique section names in first-appearance order
-    std::set<std::string> seen;
-    for (auto& obj : objects_) {
-        for (auto& sn : obj.sectionOrder) {
-            if (seen.insert(sn).second)
-                mergedOrder_.push_back(sn);
+    // Svaka sekcija iz redosleda mora postojati.
+    for (auto& sn : m.sectionOrder) {
+        if (!m.sections.count(sn)) {
+            std::cerr << "Error: '" << obj.filename << "': sekcija '" << sn
+                      << "' navedena u redosledu ne postoji\n";
+            return false;
         }
     }
-
-    // 2. Build merged sections
-    for (auto& sn : mergedOrder_) {
-        MergedSection ms;
-        ms.name      = sn;
-        ms.totalSize = 0;
-        ms.baseAddr  = 0;
-
-        for (int i = 0; i < (int)objects_.size(); i++) {
-            auto it = objects_[i].sections.find(sn);
-            if (it == objects_[i].sections.end()) continue;
-
-            SectionPiece piece;
-            piece.objIdx         = i;
-            piece.offsetInMerged = ms.totalSize;
-            piece.size           = (uint32_t)it->second.data.size();
-            ms.pieces.push_back(piece);
-
-            ms.data.insert(ms.data.end(),
-                           it->second.data.begin(),
-                           it->second.data.end());
-            ms.totalSize += piece.size;
+    // Relokacije: opseg + postojanje ciljnog simbola/sekcije.
+    for (auto& scKV : m.sections) {
+        const std::string&    sn  = scKV.first;
+        const ObjSectionData& sec = scKV.second;
+        for (auto& r : sec.relocs) {
+            if ((size_t)r.offset + 4 > sec.data.size()) {
+                std::cerr << "Error: '" << obj.filename << "': relokacija u sekciji '" << sn
+                          << "' na ofsetu 0x" << std::hex << r.offset << std::dec
+                          << " je van granica sekcije\n";
+                return false;
+            }
+            if (!r.symbol.empty() && r.symbol[0] == '.') {
+                std::string refSec = r.symbol.substr(1);
+                if (!m.sections.count(refSec)) {
+                    std::cerr << "Error: '" << obj.filename << "': relokacija referiše nepostojeću sekciju '"
+                              << refSec << "'\n";
+                    return false;
+                }
+            } else {
+                auto sit = m.symtab.find(r.symbol);
+                if (sit == m.symtab.end()) {
+                    std::cerr << "Error: '" << obj.filename << "': relokacija referiše nepoznat simbol '"
+                              << r.symbol << "'\n";
+                    return false;
+                }
+                // Relokacija po imenu na LOKALAN simbol znači referencu na nedefinisan
+                // lokalan simbol (definisan lokalan bi bio pretvoren u sekcijsku
+                // relokaciju u asembleru). Takav simbol NIKAD ne sme da bude razrešen
+                // globalnim simbolom istog imena iz drugog fajla.
+                if (!sit->second.isGlobal) {
+                    std::cerr << "Error: '" << obj.filename << "': referenca na nedefinisan lokalan simbol '"
+                              << r.symbol << "' (nedostaje definicija ili .extern)\n";
+                    return false;
+                }
+            }
         }
+    }
+    return true;
+}
 
+// ======================================================================
+//  Agregacija istoimenih sekcija (redosled prvog pojavljivanja)
+// ======================================================================
+void Linker::mergeSections() {
+    std::set<std::string> seen;
+    for (auto& obj : objects_)
+        for (auto& sn : obj.model.sectionOrder)
+            if (seen.insert(sn).second) mergedOrder_.push_back(sn);
+
+    for (auto& sn : mergedOrder_) {
+        MergedSection ms; ms.name = sn;
+        for (int i = 0; i < (int)objects_.size(); i++) {
+            auto it = objects_[i].model.sections.find(sn);
+            if (it == objects_[i].model.sections.end()) continue;
+            SectionPiece p;
+            p.objIdx         = i;
+            p.offsetInMerged = ms.totalSize;
+            p.size           = (uint32_t)it->second.data.size();
+            ms.pieces.push_back(p);
+            ms.data.insert(ms.data.end(), it->second.data.begin(), it->second.data.end());
+            ms.totalSize += p.size;
+        }
         merged_[sn] = std::move(ms);
     }
 }
 
 // ======================================================================
-//  Place sections at final addresses
+//  Globalne (izvezene) definicije + detekcija višestrukih definicija
 // ======================================================================
+bool Linker::collectGlobalDefs() {
+    bool ok = true;
+    for (int i = 0; i < (int)objects_.size(); i++) {
+        for (auto& kv : objects_[i].model.symtab) {
+            const std::string& name = kv.first;
+            const Symbol&      sym  = kv.second;
+            if (sym.type == SymbolType::SECTION) continue;      // sekcijski simbol – lokalno
+            if (!sym.isGlobal || !sym.isDefined) continue;      // samo izvezene definicije
 
+            if (globalDefs_.count(name)) {
+                std::cerr << "Error: višestruka definicija simbola '" << name << "'\n";
+                ok = false; continue;
+            }
+            globalDefs_[name] = { i, sym.section, sym.value };
+        }
+    }
+    return ok;
+}
+
+// ======================================================================
+//  Smeštanje sekcija (-place + podrazumevano)
+// ======================================================================
 bool Linker::placeSections() {
-    // 1.  Sections with explicit -place
-    uint32_t highestEnd = 0;
+    // Kraj (ekskluzivno) računamo u 64 bita: sekcija koja se završava TAČNO na
+    // 2^32 je validna (zauzima do 0xFFFFFFFF), a preko toga je greška.
+    const uint64_t LIMIT = 0x100000000ull;
+    uint64_t highestEnd = 0;
 
+    // 1) Sekcije zadate preko -place.
     for (auto& kv : placeMap_) {
         auto it = merged_.find(kv.first);
         if (it == merged_.end()) {
-            std::cerr << "Error: -place za nepostojecu sekciju '" << kv.first << "'\n"; 
+            std::cerr << "Error: -place za nepostojeću sekciju '" << kv.first << "'\n";
             return false;
         }
         it->second.baseAddr = kv.second;
-        uint32_t end = kv.second + it->second.totalSize;
-        if (end < kv.second) {
-            std::cerr << "Error: adresa sekcije '" << kv.first << "' prelazi 32-bitni adresni prostor\n";
+        uint64_t end = (uint64_t)kv.second + it->second.totalSize;
+        if (end > LIMIT) {
+            std::cerr << "Error: sekcija '" << kv.first << "' prelazi 32-bitni adresni prostor\n";
             return false;
         }
         if (end > highestEnd) highestEnd = end;
     }
 
-    // 2.  Remaining sections: placed contiguously after the highest end
+    // 2) Ostale sekcije: nadovezuju se odmah iza najviše zauzete adrese,
+    //    u redosledu prvog pojavljivanja.
     for (auto& sn : mergedOrder_) {
         if (placeMap_.count(sn)) continue;
-        merged_[sn].baseAddr = highestEnd;
-        uint32_t end = highestEnd + merged_[sn].totalSize;
-        if (end < highestEnd) {
-            std::cerr << "Error: adresa sekcije '" << sn << "' prelazi 32-bitni adresni prostor\n";
+        uint64_t end = highestEnd + merged_[sn].totalSize;
+        if (end > LIMIT) {
+            std::cerr << "Error: sekcija '" << sn << "' prelazi 32-bitni adresni prostor\n";
             return false;
         }
+        merged_[sn].baseAddr = (uint32_t)highestEnd;
         highestEnd = end;
     }
 
-    // 3.  Compute per-object section bases (absolute)
-    for (auto& kv : merged_) {
-        MergedSection& ms = kv.second;
-        for (auto& piece : ms.pieces) {
-            uint32_t base = ms.baseAddr + piece.offsetInMerged;
-            sectionBases_[{piece.objIdx, ms.name}] = base;
-        }
-    }
+    // 3) Apsolutne bazne adrese svakog parčeta.
+    for (auto& kv : merged_)
+        for (auto& p : kv.second.pieces)
+            sectionBases_[{p.objIdx, kv.first}] = kv.second.baseAddr + p.offsetInMerged;
 
     return true;
 }
 
 // ======================================================================
-//  Check for section overlaps
+//  Provera preklapanja sekcija
 // ======================================================================
-
 bool Linker::checkOverlaps() {
-    struct Range { uint32_t lo, hi; std::string name; };
-    std::vector<Range> ranges;
-
+    struct Range { uint64_t lo, hi; std::string name; };   // 64-bit: hi sme biti 2^32
+    std::vector<Range> rs;
     for (auto& kv : merged_) {
         if (kv.second.totalSize == 0) continue;
-        ranges.push_back({kv.second.baseAddr,
-                          kv.second.baseAddr + kv.second.totalSize,
-                          kv.first});
+        rs.push_back({ kv.second.baseAddr, (uint64_t)kv.second.baseAddr + kv.second.totalSize, kv.first });
     }
-
-    for (size_t i = 0; i < ranges.size(); i++) {
-        for (size_t j = i + 1; j < ranges.size(); j++) {
-            if (ranges[i].lo < ranges[j].hi && ranges[j].lo < ranges[i].hi) {
-                std::cerr << "Error: sekcije '" << ranges[i].name
-                          << "' i '" << ranges[j].name << "' se preklapaju\n";
-                return false;
-            }
+    std::sort(rs.begin(), rs.end(), [](const Range& a, const Range& b){ return a.lo < b.lo; });
+    for (size_t i = 0; i + 1 < rs.size(); i++) {
+        if (rs[i].hi > rs[i + 1].lo) {
+            std::cerr << "Error: sekcije '" << rs[i].name << "' i '" << rs[i + 1].name
+                      << "' se preklapaju\n";
+            return false;
         }
     }
     return true;
 }
 
 // ======================================================================
-//  Build global symbol table  (final addresses)
+//  Provera nerazrešenih simbola (samo -hex)
 // ======================================================================
-
-bool Linker::buildGlobalSymtab() {
+bool Linker::checkUnresolved() {
     bool ok = true;
-
-    // Pass 1 – collect all global definitions
-    for (int i = 0; i < (int)objects_.size(); i++) {
-        for (auto& kv : objects_[i].symbols) {
-            const ObjSymbol& sym = kv.second;
-
-            // Section symbols (.xxx) are local per object – skip
-            if (!sym.name.empty() && sym.name[0] == '.' && sym.type == "SECTION")
-                continue;
-
-            // UND – will be checked later
-            if (sym.type == "UND") continue;
-
-            // Only globals go into the shared table
-            if (!sym.isGlobal) continue;
-
-            // Compute final address
-            uint32_t finalAddr;
-            if (sym.section == "ABS" && sym.type == "CONST") {
-                finalAddr = sym.value;                       // absolute constant
-            } else {
-                auto baseIt = sectionBases_.find({i, sym.section});
-                if (baseIt == sectionBases_.end()) {
-                    std::cerr << "Error: simbol '" << sym.name
-                              << "' referiše nepoznatu sekciju '" << sym.section << "'\n";
-                    ok = false; continue;
-                }
-                finalAddr = baseIt->second + sym.value;
-            }
-
-            if (globalSyms_.count(sym.name)) {
-                std::cerr << "Error: višestruka definicija simbola '"
-                          << sym.name << "'\n";
-                ok = false; continue;
-            }
-
-            GlobalSym gs;
-            gs.finalAddr = finalAddr;
-            gs.objIdx    = i;
-            gs.section   = sym.section;
-            globalSyms_[sym.name] = gs;
+    std::set<std::string> reported;
+    auto report = [&](const std::string& name) {
+        if (reported.insert(name).second) {
+            std::cerr << "Error: nerazrešen simbol '" << name << "'\n";
+            ok = false;
         }
-    }
-    if (!ok) return false;
+    };
 
-    // Pass 2 – verify every relocation can be resolved
-    for (int i = 0; i < (int)objects_.size(); i++) {
-        for (auto& secKV : objects_[i].sections) {
-            for (auto& rel : secKV.second.relocs) {
-                if (!rel.symbol.empty() && rel.symbol[0] == '.')
-                    continue;                                // section symbol → per-object
-                if (!globalSyms_.count(rel.symbol)) {
-                    std::cerr << "Error: nedefinisan simbol '"
-                              << rel.symbol << "'\n";
-                    ok = false;
-                }
-            }
+    // (1) Svaki nedefinisan GLOBAL simbol (uključujući nekorišćene .extern) koji
+    //     nije definisan ni u jednom ulazu je nerazrešen.
+    for (auto& obj : objects_)
+        for (auto& kv : obj.model.symtab) {
+            const Symbol& s = kv.second;
+            if (s.type == SymbolType::SECTION) continue;
+            if (s.isGlobal && !s.isDefined && !globalDefs_.count(kv.first))
+                report(kv.first);
         }
-    }
+
+    // (2) Sigurnosna provera: svaka relokacija po imenu mora imati definiciju.
+    //     (Lokalne nedefinisane reference su već odbijene u validateObject.)
+    for (auto& obj : objects_)
+        for (auto& scKV : obj.model.sections)
+            for (auto& r : scKV.second.relocs) {
+                if (!r.symbol.empty() && r.symbol[0] == '.') continue;
+                if (!globalDefs_.count(r.symbol)) report(r.symbol);
+            }
+
     return ok;
 }
 
-// ======================================================================
-//  Apply relocations  (ABS_32 – RELA style)
-// ======================================================================
+uint32_t Linker::sectionBase(int objIdx, const std::string& sec, bool& ok) const {
+    auto it = sectionBases_.find({ objIdx, sec });
+    if (it == sectionBases_.end()) { ok = false; return 0; }
+    ok = true; return it->second;
+}
 
+// ======================================================================
+//  Primena relokacija (ABS_32) – samo -hex
+// ======================================================================
 bool Linker::applyRelocations() {
-
     for (int i = 0; i < (int)objects_.size(); i++) {
-        for (auto& secKV : objects_[i].sections) {
-            const std::string& secName = secKV.first;
-            const ObjSection&  objSec  = secKV.second;
+        for (auto& scKV : objects_[i].model.sections) {
+            const std::string&    sn  = scKV.first;
+            const ObjSectionData& sec = scKV.second;
 
-            auto msIt = merged_.find(secName);
-            if (msIt == merged_.end()) continue;
-            MergedSection& ms = msIt->second;
-
-            // Find this object's piece offset inside the merged section
+            MergedSection& ms = merged_[sn];
             uint32_t pieceOff = 0;
-            for (auto& p : ms.pieces) {
-                if (p.objIdx == i) { pieceOff = p.offsetInMerged; break; }
-            }
+            for (auto& p : ms.pieces) if (p.objIdx == i) { pieceOff = p.offsetInMerged; break; }
 
-            for (auto& rel : objSec.relocs) {
-                uint32_t patchPos = pieceOff + rel.offset;
+            for (auto& r : sec.relocs) {
+                uint32_t patchPos = pieceOff + r.offset;   // opseg već validiran pri učitavanju
 
-                if (patchPos + 3 >= ms.data.size()) {
-                    std::cerr << "Error: relokacija van granica sekcije '"
-                              << secName << "' na offsetu "
-                              << std::hex << rel.offset << std::dec << "\n";
+                uint32_t symVal = 0; bool ok = true;
+                if (!r.symbol.empty() && r.symbol[0] == '.') {
+                    symVal = sectionBase(i, r.symbol.substr(1), ok);
+                } else {
+                    auto gd = globalDefs_.find(r.symbol);
+                    if (gd == globalDefs_.end()) {
+                        std::cerr << "Error: nerazrešen simbol '" << r.symbol << "'\n"; return false;
+                    }
+                    symVal = sectionBase(gd->second.objIdx, gd->second.section, ok) + gd->second.value;
+                }
+                if (!ok) {
+                    std::cerr << "Error: ne mogu da razrešim relokaciju u sekciji '" << sn << "'\n";
                     return false;
                 }
 
-                // Resolve symbol value
-                uint32_t symVal = 0;
-
-                if (!rel.symbol.empty() && rel.symbol[0] == '.') {
-                    // Section symbol – resolve from the same object
-                    std::string refSec = rel.symbol.substr(1);
-                    auto baseIt = sectionBases_.find({i, refSec});
-                    if (baseIt == sectionBases_.end()) {
-                        std::cerr << "Error: sekcija '" << refSec
-                                  << "' ne postoji u objektu '"
-                                  << objects_[i].filename << "'\n";
-                        return false;
-                    }
-                    symVal = baseIt->second;
-                } else {
-                    // Global / extern symbol
-                    auto gsIt = globalSyms_.find(rel.symbol);
-                    if (gsIt == globalSyms_.end()) {
-                        std::cerr << "Error: nedefinisan simbol '"
-                                  << rel.symbol << "'\n";
-                        return false;
-                    }
-                    symVal = gsIt->second.finalAddr;
-                }
-
-                uint32_t finalVal = symVal + (uint32_t)rel.addend;
-
-                if (rel.type == "ABS_32") {
-                    // little-endian 32-bit write
-                    ms.data[patchPos + 0] = (uint8_t)( finalVal        & 0xFF);
-                    ms.data[patchPos + 1] = (uint8_t)((finalVal >>  8) & 0xFF);
-                    ms.data[patchPos + 2] = (uint8_t)((finalVal >> 16) & 0xFF);
-                    ms.data[patchPos + 3] = (uint8_t)((finalVal >> 24) & 0xFF);
-                } else {
-                    std::cerr << "Error: nepoznat tip relokacije '"
-                              << rel.type << "'\n";
-                    return false;
-                }
+                uint32_t v = symVal + (uint32_t)r.addend;
+                ms.data[patchPos + 0] = (uint8_t)( v        & 0xFF);
+                ms.data[patchPos + 1] = (uint8_t)((v >>  8) & 0xFF);
+                ms.data[patchPos + 2] = (uint8_t)((v >> 16) & 0xFF);
+                ms.data[patchPos + 3] = (uint8_t)((v >> 24) & 0xFF);
             }
         }
     }
@@ -460,269 +355,150 @@ bool Linker::applyRelocations() {
 }
 
 // ======================================================================
-//  Write -hex output
+//  Izlaz -hex : parovi (adresa, sadržaj), 8 bajtova po redu
 // ======================================================================
-
-void Linker::writeHex() {
-    // Sort sections by base address
-    std::vector<std::pair<uint32_t, const MergedSection*>> sorted;
-    for (auto& kv : merged_) {
-        if (kv.second.data.empty()) continue;
-        sorted.push_back({kv.second.baseAddr, &kv.second});
-    }
-    std::sort(sorted.begin(), sorted.end());
+bool Linker::writeHex() {
+    std::vector<const MergedSection*> secs;
+    for (auto& kv : merged_) if (!kv.second.data.empty()) secs.push_back(&kv.second);
+    std::sort(secs.begin(), secs.end(),
+              [](const MergedSection* a, const MergedSection* b){ return a->baseAddr < b->baseAddr; });
 
     std::ofstream f(outFile_);
-    if (!f.is_open()) {
-        std::cerr << "Error: ne mogu kreirati izlaz '" << outFile_ << "'\n";
-        return;
-    }
+    if (!f) { std::cerr << "Error: ne mogu da kreiram izlaz '" << outFile_ << "'\n"; return false; }
 
-    for (size_t si = 0; si < sorted.size(); si++) {
-        uint32_t base = sorted[si].first;
-        const MergedSection* sec = sorted[si].second;
-
-        for (size_t i = 0; i < sec->data.size(); i += 8) {
-            f << std::hex << std::uppercase
-              << std::setw(8) << std::setfill('0') << (base + (uint32_t)i)
-              << ":";
-            for (size_t j = i; j < i + 8 && j < sec->data.size(); j++) {
-                f << " " << std::hex << std::uppercase
-                  << std::setw(2) << std::setfill('0')
-                  << (unsigned)sec->data[j];
-            }
+    for (auto* s : secs) {
+        for (size_t i = 0; i < s->data.size(); i += 8) {
+            f << std::hex << std::uppercase << std::setw(8) << std::setfill('0')
+              << (uint32_t)(s->baseAddr + i) << ":";
+            for (size_t j = i; j < i + 8 && j < s->data.size(); j++)
+                f << " " << std::setw(2) << std::setfill('0') << (unsigned)s->data[j];
             f << "\n";
         }
     }
+    f.flush();
+    if (!f.good()) { std::cerr << "Error: greška pri pisanju izlaza '" << outFile_ << "'\n"; return false; }
+    return true;
 }
 
 // ======================================================================
-//  -relocatable: check only for multiple definitions (UND is allowed)
+//  Izlaz -relocatable : spojeni predmetni program u SSOB formatu
+//  (sve sekcije od nulte adrese; -place se ignoriše)
 // ======================================================================
-
-bool Linker::checkMultipleDefs() {
-    bool ok = true;
-    std::set<std::string> seen;
-
-    for (int i = 0; i < (int)objects_.size(); i++) {
-        for (auto& kv : objects_[i].symbols) {
-            const ObjSymbol& sym = kv.second;
-            if (!sym.name.empty() && sym.name[0] == '.' && sym.type == "SECTION")
-                continue;
-            if (sym.type == "UND") continue;
-            if (!sym.isGlobal) continue;
-
-            if (!seen.insert(sym.name).second) {
-                std::cerr << "Error: visestruka definicija simbola '"
-                          << sym.name << "'\n";
-                ok = false;
-            }
-        }
-    }
-    return ok;
-}
-
-// ======================================================================
-//  -relocatable: write merged object in same text format as assembler
-// ======================================================================
-
-void Linker::writeRelocatable() {
-    std::ofstream f(outFile_);
-    if (!f.is_open()) {
-        std::cerr << "Error: ne mogu kreirati izlaz '" << outFile_ << "'\n";
-        return;
-    }
-
-    // ------ piece offsets (all sections from addr 0) ------
-    // sectionBases_ not populated yet; compute piece offsets locally
-    // key: (objIdx, secName) → offset within merged section
-    std::map<std::pair<int,std::string>, uint32_t> pieceOff;
-    for (auto& kv : merged_) {
+bool Linker::writeRelocatable() {
+    // Ofset parčeta (objIdx, sekcija) unutar agregirane sekcije.
+    std::map<std::pair<int, std::string>, uint32_t> pieceOff;
+    for (auto& kv : merged_)
         for (auto& p : kv.second.pieces)
-            pieceOff[{p.objIdx, kv.first}] = p.offsetInMerged;
-    }
+            pieceOff[{ p.objIdx, kv.first }] = p.offsetInMerged;
 
-    // ============ #SYMTAB ============
-    f << "#SYMTAB\n"
-      << std::left << std::setfill(' ')
-      << std::setw(20) << "Name"
-      << std::setw(10) << "Type"
-      << std::setw(14) << "Value"
-      << std::setw(16) << "Section"
-      << "Global\n"
-      << std::string(63, '-') << "\n";
+    ObjectModel out;
+    out.sectionOrder = mergedOrder_;
 
-    // a) Section symbols (one per merged section, value=0, local)
-    for (auto& sn : mergedOrder_) {
-        std::string key = "." + sn;
-        f << std::left  << std::setfill(' ') << std::setw(20) << key
-          << std::setw(10) << "SECTION"
-          << "0x" << std::hex << std::internal
-          << std::setw(8) << std::setfill('0') << 0
-          << std::left  << std::setfill(' ')
-          << "  " << std::setw(16) << sn << "no\n";
-    }
-
-    // b) Collect unique UND symbols
-    std::set<std::string> emittedGlobal;
-    std::set<std::string> definedGlobal;
-
-    for (auto& obj : objects_)
-        for (auto& kv : obj.symbols) {
-            const ObjSymbol& sym = kv.second;
-            if (!sym.name.empty() && sym.name[0] == '.') continue;
-            if (sym.type == "UND" || !sym.isGlobal) continue;
-            definedGlobal.insert(sym.name);
-        }
-
-    // c) Global defined symbols (adjusted offset)
-    for (int i = 0; i < (int)objects_.size(); i++) {
-        for (auto& kv : objects_[i].symbols) {
-            const ObjSymbol& sym = kv.second;
-            if (!sym.name.empty() && sym.name[0] == '.') continue;
-            if (sym.type == "UND") continue;
-            if (!sym.isGlobal) continue;
-            if (emittedGlobal.count(sym.name)) continue;
-            emittedGlobal.insert(sym.name);
-
-            uint32_t val = sym.value;
-            std::string sec = sym.section;
-            std::string type = sym.type;
-
-            if (sec != "ABS" && sec != "UND") {
-                auto pit = pieceOff.find({i, sec});
-                if (pit != pieceOff.end()) val += pit->second;
-            }
-
-            f << std::left  << std::setfill(' ') << std::setw(20) << sym.name
-              << std::setw(10) << type
-              << "0x" << std::hex << std::internal
-              << std::setw(8) << std::setfill('0') << val
-              << std::left  << std::setfill(' ')
-              << "  " << std::setw(16) << sec
-              << "yes\n";
-        }
-    }
-
-    // d) UND symbols (only those not defined anywhere)
-    std::set<std::string> emittedUnd;
-    for (auto& obj : objects_) {
-        for (auto& kv : obj.symbols) {
-            const ObjSymbol& sym = kv.second;
-            if (sym.type != "UND") continue;
-            if (!sym.isGlobal) continue;
-            if (definedGlobal.count(sym.name)) continue;
-            if (emittedUnd.count(sym.name)) continue;
-            emittedUnd.insert(sym.name);
-
-            f << std::left  << std::setfill(' ') << std::setw(20) << sym.name
-              << std::setw(10) << "UND"
-              << "0x" << std::hex << std::internal
-              << std::setw(8) << std::setfill('0') << 0
-              << std::left  << std::setfill(' ')
-              << "  " << std::setw(16) << "UND"
-              << "yes\n";
-        }
-    }
-
-    f << "\n";
-
-    // ============ Sections + Relocs ============
+    // --- Sekcije: podaci + prilagođene relokacije ---
     for (auto& sn : mergedOrder_) {
         MergedSection& ms = merged_[sn];
+        ObjSectionData sd;
+        sd.data = ms.data;                       // spojeni bajtovi (od adrese 0)
 
-        // #SECTION
-        f << "#SECTION " << sn << " size=" << std::dec << ms.data.size() << "\n";
-        for (size_t i = 0; i < ms.data.size(); i++) {
-            if (i % 16 == 0) {
-                if (i) f << "\n";
-                f << std::hex << std::right
-                  << std::setw(4) << std::setfill('0') << i << ": ";
-            }
-            f << std::hex << std::setw(2) << std::setfill('0')
-              << (unsigned)ms.data[i] << " ";
-        }
-        if (!ms.data.empty()) f << "\n";
+        for (auto& p : ms.pieces) {
+            int oi = p.objIdx;
+            auto secIt = objects_[oi].model.sections.find(sn);
+            if (secIt == objects_[oi].model.sections.end()) continue;
 
-        // #RELA — gather adjusted relocs from every piece
-        std::vector<ObjReloc> mergedRelocs;
-
-        for (auto& piece : ms.pieces) {
-            int oi = piece.objIdx;
-            auto secIt = objects_[oi].sections.find(sn);
-            if (secIt == objects_[oi].sections.end()) continue;
-
-            for (auto& rel : secIt->second.relocs) {
-                ObjReloc mr;
-                mr.offset = rel.offset + piece.offsetInMerged;
-                mr.type   = rel.type;
-                mr.symbol = rel.symbol;
-                mr.addend = rel.addend;
-
-                // If the symbol is a section symbol from the same object,
-                // adjust addend by that section's piece offset
-                if (!rel.symbol.empty() && rel.symbol[0] == '.') {
-                    std::string refSec = rel.symbol.substr(1);
-                    auto pit = pieceOff.find({oi, refSec});
-                    if (pit != pieceOff.end())
-                        mr.addend += (int32_t)pit->second;
-                    // The merged section symbol covers the whole merged
-                    // section, so the symbol name stays the same.
+            for (auto& r : secIt->second.relocs) {
+                ObjReloc nr;
+                nr.offset = r.offset + p.offsetInMerged;
+                nr.symbol = r.symbol;
+                nr.addend = r.addend;
+                // Sekcijski simbol pokriva celu agregiranu sekciju -> addend
+                // se pomera za ofset referisane sekcije u tom objektu.
+                if (!r.symbol.empty() && r.symbol[0] == '.') {
+                    auto pit = pieceOff.find({ oi, r.symbol.substr(1) });
+                    if (pit != pieceOff.end()) nr.addend += (int32_t)pit->second;
                 }
-
-                mergedRelocs.push_back(mr);
+                // Održavamo invarijantu: data[slot] == addend (kao kod asemblera).
+                uint32_t a = (uint32_t)nr.addend;
+                sd.data[nr.offset + 0] = (uint8_t)( a        & 0xFF);
+                sd.data[nr.offset + 1] = (uint8_t)((a >>  8) & 0xFF);
+                sd.data[nr.offset + 2] = (uint8_t)((a >> 16) & 0xFF);
+                sd.data[nr.offset + 3] = (uint8_t)((a >> 24) & 0xFF);
+                sd.relocs.push_back(nr);
             }
         }
-
-        if (!mergedRelocs.empty()) {
-            f << "#RELA " << sn << "\n"
-              << std::left << std::setfill(' ')
-              << std::setw(12) << "Offset"
-              << std::setw(10) << "Type"
-              << std::setw(22) << "Symbol"
-              << "Addend\n"
-              << std::string(52, '-') << "\n";
-
-            for (auto& r : mergedRelocs) {
-                f << "0x" << std::hex << std::internal
-                  << std::setw(8) << std::setfill('0') << r.offset
-                  << std::left  << std::setfill(' ')
-                  << "  " << std::setw(10) << r.type
-                  << std::setw(22) << r.symbol
-                  << std::dec << r.addend << "\n";
-            }
-        }
-        f << "\n";
+        out.sections[sn] = std::move(sd);
     }
+
+    // --- Simboli ---
+    // a) sekcijski simbol za svaku agregiranu sekciju
+    for (auto& sn : mergedOrder_) {
+        Symbol s;
+        s.type = SymbolType::SECTION; s.value = 0; s.section = sn;
+        s.isGlobal = false; s.isDefined = true;
+        out.symtab["." + sn] = s;
+    }
+    // b) globalne definisane simbole (vrednost pomerena za ofset parčeta)
+    for (auto& kv : globalDefs_) {
+        const std::string& name = kv.first;
+        const GlobalDef&   gd   = kv.second;
+        uint32_t off = 0;
+        auto pit = pieceOff.find({ gd.objIdx, gd.section });
+        if (pit != pieceOff.end()) off = pit->second;
+        Symbol s;
+        s.type = SymbolType::LABEL; s.value = gd.value + off; s.section = gd.section;
+        s.isGlobal = true; s.isDefined = true;
+        out.symtab[name] = s;
+    }
+    // c) preostale nerazrešene (UND) globalne simbole
+    std::set<std::string> undEmitted;
+    for (auto& obj : objects_) {
+        for (auto& kv : obj.model.symtab) {
+            const Symbol& sym = kv.second;
+            if (sym.isDefined || sym.type == SymbolType::SECTION) continue;
+            if (globalDefs_.count(kv.first)) continue;          // ipak definisan negde
+            if (!undEmitted.insert(kv.first).second) continue;
+            Symbol s; s.type = SymbolType::UND; s.value = 0; s.section = "UND";
+            s.isGlobal = true; s.isDefined = false;
+            out.symtab[kv.first] = s;
+        }
+    }
+
+    std::ofstream fb(outFile_, std::ios::binary);
+    if (!fb) { std::cerr << "Error: ne mogu da kreiram izlaz '" << outFile_ << "'\n"; return false; }
+    objWriteBinary(fb, out);
+    fb.flush();
+    if (!fb.good()) { std::cerr << "Error: greška pri pisanju izlaza '" << outFile_ << "'\n"; return false; }
+
+    std::ofstream ft(outFile_ + ".txt");            // čitljiv prikaz (pomoćni)
+    if (ft) objWriteText(ft, out);
+    else std::cerr << "Upozorenje: ne mogu da kreiram '" << outFile_ << ".txt'\n";
+    return true;
 }
 
 // ======================================================================
-//  Main entry point
+//  Glavni tok
 // ======================================================================
-
 int Linker::run(int argc, char* argv[]) {
-    if (!parseArgs(argc, argv))   return 1;
+    if (!parseArgs(argc, argv)) return 1;
 
+    // 1) Najpre učitaj i validiraj SVE ulazne fajlove.
     for (auto& file : inputFiles_)
-        if (!loadObject(file))    return 1;
+        if (!loadObject(file)) return 1;
 
+    // 2) Tek onda agregacija, tabela simbola i povezivanje.
     mergeSections();
+    if (!collectGlobalDefs()) return 1;   // višestruke definicije (oba režima)
 
     if (hexMode_) {
-        if (!placeSections())         return 1;
-        if (!checkOverlaps())         return 1;
-        if (!buildGlobalSymtab())     return 1;
-        if (!applyRelocations())      return 1;
-        writeHex();
-    } else if (relocMode_) {
-        if (!checkMultipleDefs())     return 1;
-        writeRelocatable();
+        if (!placeSections())    return 1;
+        if (!checkOverlaps())    return 1;
+        if (!checkUnresolved())  return 1;
+        if (!applyRelocations()) return 1;
+        if (!writeHex())         return 1;
+    } else { // relocMode_
+        if (!writeRelocatable()) return 1;
     }
-
     return 0;
 }
-
-// ======================================================================
 
 int main(int argc, char* argv[]) {
     Linker linker;
