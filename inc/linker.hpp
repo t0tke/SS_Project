@@ -66,7 +66,7 @@ private:
     bool parseArgs(int argc, char* argv[]);
     bool loadObject(const std::string& filename);
     bool validateObject(const LoadedObject& obj);   // strukturna provera učitanog modela
-    void mergeSections();
+    bool mergeSections();
     bool collectGlobalDefs();                        // + detekcija višestrukih definicija
     bool placeSections();                            // -place + podrazumevano
     bool checkOverlaps();

@@ -159,7 +159,7 @@ bool Linker::validateObject(const LoadedObject& obj) {
 // ======================================================================
 //  Agregacija istoimenih sekcija (redosled prvog pojavljivanja)
 // ======================================================================
-void Linker::mergeSections() {
+bool Linker::mergeSections() {
     std::set<std::string> seen;
     for (auto& obj : objects_)
         for (auto& sn : obj.model.sectionOrder)
@@ -174,12 +174,20 @@ void Linker::mergeSections() {
             p.objIdx         = i;
             p.offsetInMerged = ms.totalSize;
             p.size           = (uint32_t)it->second.data.size();
+            // Agregirana veličina/ofset moraju da stanu u 32-bitni adresni prostor;
+            // preko toga bi se ofset "obmotao" i pokvario smeštanje i relokacije.
+            if ((uint64_t)ms.totalSize + p.size > 0xFFFFFFFFull) {
+                std::cerr << "Error: agregirana sekcija '" << sn
+                          << "' prelazi 32-bitni adresni prostor\n";
+                return false;
+            }
             ms.pieces.push_back(p);
             ms.data.insert(ms.data.end(), it->second.data.begin(), it->second.data.end());
             ms.totalSize += p.size;
         }
         merged_[sn] = std::move(ms);
     }
+    return true;
 }
 
 // ======================================================================
@@ -233,6 +241,13 @@ bool Linker::placeSections() {
     //    u redosledu prvog pojavljivanja.
     for (auto& sn : mergedOrder_) {
         if (placeMap_.count(sn)) continue;
+        // Baza mora biti VALIDNA 32-bitna adresa. Ako se prethodna sekcija
+        // završila tačno na 0x100000000, ova (pa i prazna) bi počela van prostora;
+        // provera je PRE kastovanja u uint32_t da se highestEnd ne bi obmotao na 0.
+        if (highestEnd > 0xFFFFFFFFull) {
+            std::cerr << "Error: sekcija '" << sn << "' počinje na adresi van 32-bitnog prostora\n";
+            return false;
+        }
         uint64_t end = highestEnd + merged_[sn].totalSize;
         if (end > LIMIT) {
             std::cerr << "Error: sekcija '" << sn << "' prelazi 32-bitni adresni prostor\n";
@@ -242,10 +257,19 @@ bool Linker::placeSections() {
         highestEnd = end;
     }
 
-    // 3) Apsolutne bazne adrese svakog parčeta.
+    // 3) Apsolutne bazne adrese svakog parčeta. Račun je u 64 bita i proverava se
+    //    PRE kastovanja: prazno parče na kraju sekcije koja se završava na
+    //    0x100000000 imalo bi bazu 0x100000000 koja bi se obmotala na 0.
     for (auto& kv : merged_)
-        for (auto& p : kv.second.pieces)
-            sectionBases_[{p.objIdx, kv.first}] = kv.second.baseAddr + p.offsetInMerged;
+        for (auto& p : kv.second.pieces) {
+            uint64_t base = (uint64_t)kv.second.baseAddr + p.offsetInMerged;
+            if (base > 0xFFFFFFFFull) {
+                std::cerr << "Error: parče sekcije '" << kv.first
+                          << "' počinje na adresi van 32-bitnog prostora\n";
+                return false;
+            }
+            sectionBases_[{p.objIdx, kv.first}] = (uint32_t)base;
+        }
 
     return true;
 }
@@ -328,22 +352,32 @@ bool Linker::applyRelocations() {
             for (auto& r : sec.relocs) {
                 uint32_t patchPos = pieceOff + r.offset;   // opseg već validiran pri učitavanju
 
-                uint32_t symVal = 0; bool ok = true;
+                // Adresu računamo u 64 bita da bismo otkrili "obmotavanje":
+                // simbol na kraju sekcije koja se završava tačno na 2^32 imao bi
+                // adresu 0x100000000 koja se u 32 bita svodi na 0.
+                bool ok = true;
+                int64_t addr;
                 if (!r.symbol.empty() && r.symbol[0] == '.') {
-                    symVal = sectionBase(i, r.symbol.substr(1), ok);
+                    addr = (int64_t)sectionBase(i, r.symbol.substr(1), ok) + (int64_t)r.addend;
                 } else {
                     auto gd = globalDefs_.find(r.symbol);
                     if (gd == globalDefs_.end()) {
                         std::cerr << "Error: nerazrešen simbol '" << r.symbol << "'\n"; return false;
                     }
-                    symVal = sectionBase(gd->second.objIdx, gd->second.section, ok) + gd->second.value;
+                    addr = (int64_t)sectionBase(gd->second.objIdx, gd->second.section, ok)
+                         + (int64_t)gd->second.value + (int64_t)r.addend;
                 }
                 if (!ok) {
                     std::cerr << "Error: ne mogu da razrešim relokaciju u sekciji '" << sn << "'\n";
                     return false;
                 }
+                if (addr < 0 || addr > 0xFFFFFFFFll) {
+                    std::cerr << "Error: relokacija u sekciji '" << sn << "' (simbol '"
+                              << r.symbol << "') daje adresu van 32-bitnog prostora\n";
+                    return false;
+                }
 
-                uint32_t v = symVal + (uint32_t)r.addend;
+                uint32_t v = (uint32_t)addr;
                 ms.data[patchPos + 0] = (uint8_t)( v        & 0xFF);
                 ms.data[patchPos + 1] = (uint8_t)((v >>  8) & 0xFF);
                 ms.data[patchPos + 2] = (uint8_t)((v >> 16) & 0xFF);
@@ -411,10 +445,14 @@ bool Linker::writeRelocatable() {
                 nr.symbol = r.symbol;
                 nr.addend = r.addend;
                 // Sekcijski simbol pokriva celu agregiranu sekciju -> addend
-                // se pomera za ofset referisane sekcije u tom objektu.
+                // se pomera za ofset referisane sekcije u tom objektu. Račun je
+                // u uint32 (modularno, dobro definisano): za ofset > 0x7FFFFFFF
+                // bi `(int32_t)pieceOffset` bio negativan i signed-overflow (UB);
+                // ovako je 32-bitni obrazac bita uvek ispravan.
                 if (!r.symbol.empty() && r.symbol[0] == '.') {
                     auto pit = pieceOff.find({ oi, r.symbol.substr(1) });
-                    if (pit != pieceOff.end()) nr.addend += (int32_t)pit->second;
+                    if (pit != pieceOff.end())
+                        nr.addend = (int32_t)((uint32_t)nr.addend + pit->second);
                 }
                 // Održavamo invarijantu: data[slot] == addend (kao kod asemblera).
                 uint32_t a = (uint32_t)nr.addend;
@@ -485,7 +523,7 @@ int Linker::run(int argc, char* argv[]) {
         if (!loadObject(file)) return 1;
 
     // 2) Tek onda agregacija, tabela simbola i povezivanje.
-    mergeSections();
+    if (!mergeSections())     return 1;
     if (!collectGlobalDefs()) return 1;   // višestruke definicije (oba režima)
 
     if (hexMode_) {
