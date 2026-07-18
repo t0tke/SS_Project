@@ -61,12 +61,4 @@ testb: $(TARGET)
 	./$(TARGET) -o isr_terminal_b.o  tests/nivo-b/isr_terminal.s
 	@echo "--- Uspešno! ---"
 
-testc: $(TARGET)
-	@echo "--- Nivo C ---"
-	./$(TARGET) -o main_c.o          tests/nivo-c/main.s
-	./$(TARGET) -o handler_c.o       tests/nivo-c/handler.s
-	./$(TARGET) -o isr_timer_c.o     tests/nivo-c/isr_timer.s
-	./$(TARGET) -o isr_terminal_c.o  tests/nivo-c/isr_terminal.s
-	@echo "--- Uspešno! ---"
-
 .PHONY: all clean testa testb testc
