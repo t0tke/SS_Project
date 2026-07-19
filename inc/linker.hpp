@@ -68,11 +68,15 @@ private:
     bool validateObject(const LoadedObject& obj);   // strukturna provera učitanog modela
     bool mergeSections();
     bool collectGlobalDefs();                        // + detekcija višestrukih definicija
+   
+    //hex
     bool placeSections();                            // -place + podrazumevano
     bool checkOverlaps();
     bool checkUnresolved();                          // samo -hex
     bool applyRelocations();                         // samo -hex
     bool writeHex();
+    
+    //relocatable
     bool writeRelocatable();
 
     // pomoćno
