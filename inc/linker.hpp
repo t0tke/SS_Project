@@ -1,92 +1,84 @@
 #pragma once
+// linker.hpp – SS 2025/2026
+// Linker nivoa B za sopstveni binarni SSOB predmetni format.
+// Radi nad zajedničkim objektnim modelom (ObjectModel) iz objfile.hpp:
+// isti model puni asembler pri pisanju i linker pri čitanju.
+
+#include "objfile.hpp"
 #include <string>
 #include <vector>
 #include <map>
 #include <cstdint>
 #include <utility>
 
-// ---------- per-object-file structures ----------
-
-struct ObjSymbol {
-    std::string name;
-    std::string type;    // "SECTION", "LABEL", "CONST", "UND"
-    uint32_t    value;
-    std::string section; // section name, or "UND"/"ABS"
-    bool        isGlobal;
+// ---------- učitani ulazni predmetni program ----------
+struct LoadedObject {
+    std::string filename;
+    ObjectModel model;
 };
 
-struct ObjReloc {
-    uint32_t    offset;
-    std::string type;    // "ABS_32"
-    std::string symbol;
-    int32_t     addend;
-};
-
-struct ObjSection {
-    std::string             name;
-    std::vector<uint8_t>    data;
-    std::vector<ObjReloc>   relocs;
-};
-
-struct ObjectFile {
-    std::string                         filename;
-    std::map<std::string, ObjSymbol>    symbols;
-    std::vector<std::string>            sectionOrder;   // insertion order
-    std::map<std::string, ObjSection>   sections;
-};
-
-// ---------- merged / linker structures ----------
-
+// ---------- agregacija istoimenih sekcija ----------
+// Parče = doprinos jednog objekta jednoj agregiranoj sekciji.
 struct SectionPiece {
-    int      objIdx;
-    uint32_t offsetInMerged;
+    int      objIdx;          // indeks u objects_
+    uint32_t offsetInMerged;  // ofset ovog parčeta u agregiranoj sekciji
     uint32_t size;
 };
 
 struct MergedSection {
     std::string               name;
-    uint32_t                  totalSize;
-    uint32_t                  baseAddr;
-    std::vector<uint8_t>      data;
+    uint32_t                  totalSize = 0;
+    uint32_t                  baseAddr  = 0;   // konačna adresa (posle placeSections)
+    std::vector<uint8_t>      data;            // spojeni bajtovi svih parčića
     std::vector<SectionPiece> pieces;
 };
 
-struct GlobalSym {
-    uint32_t    finalAddr;
-    int         objIdx;
-    std::string section;
+// ---------- globalna (izvezena) definicija simbola ----------
+struct GlobalDef {
+    int         objIdx;    // objekat u kome je simbol definisan
+    std::string section;   // sekcija u kojoj je definisan
+    uint32_t    value;     // ofset unutar te sekcije
 };
 
-// ---------- Linker class ----------
-
+// ---------- Linker ----------
 class Linker {
 public:
     int run(int argc, char* argv[]);
 
 private:
-    std::vector<ObjectFile>   objects_;
+    // ulaz / opcije
     std::vector<std::string>  inputFiles_;
-    std::vector<std::string>  mergedOrder_;          // unique section names, first-appearance order
+    std::string               outFile_;
+    bool                      haveOut_   = false;
+    bool                      hexMode_   = false;
+    bool                      relocMode_ = false;
+    std::map<std::string, uint32_t> placeMap_;   // ime sekcije -> zadata adresa
 
-    std::map<std::string, MergedSection>  merged_;
-    std::map<std::string, uint32_t>       placeMap_;  // -place overrides
-    std::map<std::string, GlobalSym>      globalSyms_;
+    // učitani objekti i izvedene strukture
+    std::vector<LoadedObject>            objects_;
+    std::vector<std::string>             mergedOrder_;   // sekcije, redosled prvog pojavljivanja
+    std::map<std::string, MergedSection> merged_;
+    std::map<std::string, GlobalDef>     globalDefs_;    // izvezeni definisani simboli
+    // (objIdx, ime sekcije) -> apsolutna bazna adresa tog parčeta
+    std::map<std::pair<int, std::string>, uint32_t> sectionBases_;
 
-    // key = (objIdx, sectionName) → absolute base address of that piece
-    std::map<std::pair<int,std::string>, uint32_t> sectionBases_;
-
-    std::string outFile_;
-    bool hexMode_;
-    bool relocMode_;
-
-    bool parseArgs   (int argc, char* argv[]);
-    bool loadObject  (const std::string& filename);
-    void mergeSections();
-    bool placeSections();
+    // faze rada
+    bool parseArgs(int argc, char* argv[]);
+    bool loadObject(const std::string& filename);
+    bool validateObject(const LoadedObject& obj);   // strukturna provera učitanog modela
+    bool mergeSections();
+    bool collectGlobalDefs();                        // + detekcija višestrukih definicija
+   
+    //hex
+    bool placeSections();                            // -place + podrazumevano
     bool checkOverlaps();
-    bool buildGlobalSymtab();
-    bool applyRelocations();
-    void writeHex();
-    bool checkMultipleDefs();
-    void writeRelocatable();
+    bool checkUnresolved();                          // samo -hex
+    bool applyRelocations();                         // samo -hex
+    bool writeHex();
+    
+    //relocatable
+    bool writeRelocatable();
+
+    // pomoćno
+    uint32_t sectionBase(int objIdx, const std::string& sec, bool& ok) const;
 };

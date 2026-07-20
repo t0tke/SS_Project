@@ -292,72 +292,95 @@ void objWriteBinary(std::ostream& os, const ObjectModel& m) {
 bool objReadBinary(std::istream& is, ObjectModel& m) {
     std::vector<uint8_t> b((std::istreambuf_iterator<char>(is)),
                             std::istreambuf_iterator<char>());
-    if (b.size() < objfmt::HEADER_SIZE) return false;
+    const uint64_t total = b.size();
+    if (total < objfmt::HEADER_SIZE) return false;
     if (memcmp(b.data(), objfmt::MAGIC, 4) != 0) return false;
-    // (version/endian se ne proveravaju strogo – format je jednostavan)
+
+    // Verzija i endian moraju tačno da odgovaraju (inače je fajl nekompatibilan/oštećen).
+    if (get16(b, 4) != objfmt::VERSION)   return false;
+    if (get16(b, 6) != objfmt::ENDIAN_LE) return false;
 
     const uint32_t sectionCount = get32(b, 8);
     const uint32_t symbolCount  = get32(b, 12);
     const uint32_t relocCount   = get32(b, 16);
     const uint32_t strtabOff    = get32(b, 20);
     const uint32_t strtabSize   = get32(b, 24);
-    (void)get16(b, 4); (void)get16(b, 6);
 
-    if (strtabOff + strtabSize > b.size()) return false;
+    // Sva provera opsega ide preko 64-bitne aritmetike da 32-bitni sabirci
+    // ne bi mogli da se "obmotaju" (overflow) i zaobiđu granice.
+    auto region = [&](uint64_t off, uint64_t len) -> bool {
+        return off <= total && len <= total - off;   // off+len <= total, bez overflow-a
+    };
+
+    // String tabela: mora da stane i da se završava NUL-om (garantuje bezbedno čitanje niski).
+    if (!region(strtabOff, strtabSize)) return false;
+    if (strtabSize == 0 || b[strtabOff + strtabSize - 1] != 0) return false;
+
+    bool strOk = true;
     auto str = [&](uint32_t off) -> std::string {
-        if (off >= strtabSize) return std::string();
-        const char* p = reinterpret_cast<const char*>(b.data() + strtabOff + off);
-        return std::string(p);
+        if (off >= strtabSize) { strOk = false; return std::string(); }
+        uint64_t start = (uint64_t)strtabOff + off;
+        uint64_t limit = (uint64_t)strtabOff + strtabSize;   // poslednji bajt je NUL
+        uint64_t p = start;
+        while (p < limit && b[p] != 0) p++;
+        // p < limit uvek važi jer je poslednji bajt NUL -> niska je ograničena.
+        return std::string(reinterpret_cast<const char*>(&b[start]), (size_t)(p - start));
     };
 
     m.sectionOrder.clear();
     m.symtab.clear();
     m.sections.clear();
 
-    // Section header table
-    const uint32_t secTabOff = objfmt::HEADER_SIZE;
+    // ---- Tabela zaglavlja sekcija ----
+    const uint64_t secTabOff = objfmt::HEADER_SIZE;
+    if (!region(secTabOff, (uint64_t)sectionCount * objfmt::SEC_ENT_SIZE)) return false;
     for (uint32_t i = 0; i < sectionCount; i++) {
-        uint32_t e = secTabOff + i * objfmt::SEC_ENT_SIZE;
-        if (e + objfmt::SEC_ENT_SIZE > b.size()) return false;
+        uint64_t e = secTabOff + (uint64_t)i * objfmt::SEC_ENT_SIZE;
         std::string name = str(get32(b, e));
         uint32_t dataOff  = get32(b, e + 4);
         uint32_t dataSize = get32(b, e + 8);
-        if (dataOff + dataSize > b.size()) return false;
+        if (!region(dataOff, dataSize)) return false;
+        if (m.sections.count(name)) return false;            // duplirana sekcija
         m.sectionOrder.push_back(name);
         ObjSectionData sd;
         sd.data.assign(b.begin() + dataOff, b.begin() + dataOff + dataSize);
         m.sections[name] = std::move(sd);
     }
 
-    // Symbol table
-    const uint32_t symTabOff = secTabOff + objfmt::SEC_ENT_SIZE * sectionCount;
+    // ---- Tabela simbola ----
+    const uint64_t symTabOff = secTabOff + (uint64_t)sectionCount * objfmt::SEC_ENT_SIZE;
+    if (!region(symTabOff, (uint64_t)symbolCount * objfmt::SYM_ENT_SIZE)) return false;
     for (uint32_t i = 0; i < symbolCount; i++) {
-        uint32_t e = symTabOff + i * objfmt::SYM_ENT_SIZE;
-        if (e + objfmt::SYM_ENT_SIZE > b.size()) return false;
+        uint64_t e = symTabOff + (uint64_t)i * objfmt::SYM_ENT_SIZE;
         std::string name = str(get32(b, e));
+        uint8_t tcode = b[e + 4];
+        if (tcode > objfmt::T_SECTION) return false;         // nepoznat tip simbola
         Symbol s;
-        s.type      = typeFromCode(b[e + 4]);
+        s.type      = typeFromCode(tcode);
         s.isGlobal  = b[e + 5] != 0;
         s.isDefined = b[e + 6] != 0;
         s.section   = str(get32(b, e + 8));
         s.value     = get32(b, e + 12);
+        if (m.symtab.count(name)) return false;              // dupliran simbol
         m.symtab[name] = s;
     }
 
-    // Relocation table
-    const uint32_t relTabOff = symTabOff + objfmt::SYM_ENT_SIZE * symbolCount;
+    // ---- Tabela relokacija ----
+    const uint64_t relTabOff = symTabOff + (uint64_t)symbolCount * objfmt::SYM_ENT_SIZE;
+    if (!region(relTabOff, (uint64_t)relocCount * objfmt::REL_ENT_SIZE)) return false;
     for (uint32_t i = 0; i < relocCount; i++) {
-        uint32_t e = relTabOff + i * objfmt::REL_ENT_SIZE;
-        if (e + objfmt::REL_ENT_SIZE > b.size()) return false;
+        uint64_t e = relTabOff + (uint64_t)i * objfmt::REL_ENT_SIZE;
         std::string secName = str(get32(b, e));
         ObjReloc r;
         r.offset = get32(b, e + 4);
         r.symbol = str(get32(b, e + 8));
         r.addend = (int32_t)get32(b, e + 12);
         auto it = m.sections.find(secName);
-        if (it == m.sections.end()) return false;
+        if (it == m.sections.end()) return false;            // relokacija za nepoznatu sekciju
+        if ((uint64_t)r.offset + 4 > it->second.data.size()) return false; // van granica sekcije
         it->second.relocs.push_back(r);
     }
 
+    if (!strOk) return false;   // neki string ofset je bio van string tabele
     return true;
 }
