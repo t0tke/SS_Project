@@ -115,17 +115,11 @@ bool Linker::validateObject(const LoadedObject& obj) {
             return false;
         }
     }
-    // Relokacije: opseg + postojanje ciljnog simbola/sekcije.
+    // Relokacije: postojanje ciljnog simbola/sekcije.
+    // (Opseg r.offset+4 <= data.size() je već garantovao objReadBinary pri učitavanju.)
     for (auto& scKV : m.sections) {
-        const std::string&    sn  = scKV.first;
         const ObjSectionData& sec = scKV.second;
         for (auto& r : sec.relocs) {
-            if ((size_t)r.offset + 4 > sec.data.size()) {
-                std::cerr << "Error: '" << obj.filename << "': relokacija u sekciji '" << sn
-                          << "' na ofsetu 0x" << std::hex << r.offset << std::dec
-                          << " je van granica sekcije\n";
-                return false;
-            }
             if (!r.symbol.empty() && r.symbol[0] == '.') {
                 std::string refSec = r.symbol.substr(1);
                 if (!m.sections.count(refSec)) {
@@ -356,12 +350,11 @@ bool Linker::applyRelocations() {
                 if (!r.symbol.empty() && r.symbol[0] == '.') {
                     addr = (int64_t)sectionBase(i, r.symbol.substr(1), ok) + (int64_t)r.addend;
                 } else {
-                    auto gd = globalDefs_.find(r.symbol);
-                    if (gd == globalDefs_.end()) {
-                        std::cerr << "Error: nerazrešen simbol '" << r.symbol << "'\n"; return false;
-                    }
-                    addr = (int64_t)sectionBase(gd->second.objIdx, gd->second.section, ok)
-                         + (int64_t)gd->second.value + (int64_t)r.addend;
+                    // Simbol je garantovano razrešen: checkUnresolved() se izvršava pre
+                    // applyRelocations() i odbija svaku relokaciju bez definicije.
+                    const GlobalDef& gd = globalDefs_.at(r.symbol);
+                    addr = (int64_t)sectionBase(gd.objIdx, gd.section, ok)
+                         + (int64_t)gd.value + (int64_t)r.addend;
                 }
                 if (!ok) {
                     std::cerr << "Error: ne mogu da razrešim relokaciju u sekciji '" << sn << "'\n";
