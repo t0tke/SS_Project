@@ -22,11 +22,9 @@ struct LoadedObject {
 struct SectionPiece {
     int      objIdx;          // indeks u objects_
     uint32_t offsetInMerged;  // ofset ovog parčeta u agregiranoj sekciji
-    uint32_t size;
 };
 
 struct MergedSection {
-    std::string               name;
     uint32_t                  totalSize = 0;
     uint32_t                  baseAddr  = 0;   // konačna adresa (posle placeSections)
     std::vector<uint8_t>      data;            // spojeni bajtovi svih parčića
