@@ -41,7 +41,7 @@ SectionInfo& Assembler::curSec() {
 int Assembler::lc() { return curSection_.empty() ? 0 : sections_[curSection_].lc; }
 
 int Assembler::regIdx(const char* reg) {
-    return atoi(reg + 2);
+    return atoi(reg + 1);
 }
 int Assembler::csrIdx(const char* csr) {
     if (!strcmp(csr,"status"))  return 0;
