@@ -260,8 +260,11 @@ void Assembler::defineLabel(const char* name) {
 void Assembler::encodeHalt() { emit32(0x00000000u); }
 void Assembler::encodeInt()  { emit32(0x10000000u); }
 void Assembler::encodeIret() {
-    emit32(0x93FE0004u); // pop pc
-    emit32(0x970E0004u); // pop status
+    // Vrati status pa pc, i tek na kraju pomeri sp za 8. Redosled je bitan: prva
+    // instrukcija vraća status (ne dira sp, ne skače), a druga učitava pc i uvećava
+    // sp (skače) — tako se OBE izvrše i stek se korektno oslobodi (sp += 8).
+    emit32(0x960E0004u); // status <= mem32[sp+4]
+    emit32(0x93FE0008u); // pc <= mem32[sp]; sp <= sp+8
 }
 void Assembler::encodeRet()  { emit32(0x93FE0004u); }
 
