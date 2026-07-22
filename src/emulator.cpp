@@ -31,7 +31,7 @@ namespace {
     constexpr uint32_t CAUSE_SOFTWARE  = 4;   // softverski prekid (int)
 
     // Znakovno proširenje 12-bitnog pomeraja na 32-bitni označeni broj.
-    inline int32_t signExt12(uint32_t d) {
+    int32_t signExt12(uint32_t d) {
         return (int32_t)(d<<20) >> 20;
     }
 }
@@ -43,7 +43,7 @@ uint32_t Emulator::load32(uint32_t addr) {
     // Sav pristup memoriji od strane instrukcija je 32-bitni, pa memorijski
     // mapirane registre presrećemo na nivou 32-bitne reči.
     if (addr == TERM_IN)  return termIn_;
-    if (addr == TERM_OUT) return 0;   // čitanje izlaznog registra nema definisan sadržaj
+    if (addr == TERM_OUT) return 0;  
 
     uint32_t v = 0;
     for (int i = 0; i < 4; i++) {
@@ -61,7 +61,6 @@ void Emulator::store32(uint32_t addr, uint32_t value) {
         return;
     }
     if (addr == TERM_IN) {
-        termIn_ = value;   // upis u ulazni registar nema efekat na terminal
         return;
     }
     for (int i = 0; i < 4; i++)
