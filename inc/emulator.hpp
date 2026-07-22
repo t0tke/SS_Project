@@ -32,9 +32,8 @@ private:
     // ---- Terminal ----
     uint32_t termIn_      = 0;       // poslednji pritisnut taster (term_in registar)
     bool     termPending_ = false;   // neisporučen zahtev za prekid od terminala
-    bool     ttyRaw_      = false;   // da li je terminal prebačen u sirovi režim
+    bool     termiosChanged_      = false;   // da li je terminal prebačen u sirovi režim
     termios  savedTermios_{};        // originalna podešavanja terminala (za restore)
-    int      savedFl_     = -1;       // originalne fcntl zastavice stdin-a (za restore O_NONBLOCK)
 
     // ---- Memorijski pristup (little-endian, sa memorijski mapiranim registrima) ----
     uint32_t load32(uint32_t addr);

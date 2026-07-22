@@ -1,15 +1,4 @@
 // emulator.cpp – SS 2025/2026 – Interpretativni emulator (nivo B)
-//
-// Podržava sve zahteve nivoa A (ceo procesor i mehanizam prekida) i periferiju
-// terminal iz nivoa B. Tajmer (tim_cfg) NIJE emuliran – upisi u njegov memorijski
-// mapirani registar se prihvataju kao običan pristup memoriji, ali ne generišu
-// prekid.
-//
-// Format instrukcije (32 bita, u memoriji little-endian kao i svaki podatak):
-//   OC[31:28] MOD[27:24] RegA[23:20] RegB[19:16] RegC[15:12] Disp[11:0]
-// Ovaj raspored je identičan onome koji generiše asembler (emit32 + appendLE32),
-// pa emulator instrukciju čita istom little-endian 32-bitnom operacijom.
-
 #include "emulator.hpp"
 
 #include <cstdio>
@@ -19,7 +8,6 @@
 #include <sstream>
 #include <string>
 #include <unistd.h>
-#include <fcntl.h>
 
 // ---- Konstante sistema ----
 namespace {
@@ -44,7 +32,7 @@ namespace {
 
     // Znakovno proširenje 12-bitnog pomeraja na 32-bitni označeni broj.
     inline int32_t signExt12(uint32_t d) {
-        return (int32_t)((d & 0xFFFu) ^ 0x800u) - 0x800;
+        return (int32_t)(d<<20) >> 20;
     }
 }
 
@@ -323,31 +311,27 @@ void Emulator::dumpState() const {
 
 // ======================================================================
 //  Terminal: sirovi neblokirajući ulaz (bez eho prikaza)
+//
+//  Dovoljan je "raw" režim sa VMIN=0 i VTIME=0: čitanje se ne baferiše do
+//  Enter-a (ICANON off), ne prikazuje se ukucani znak (ECHO off), a read()
+//  se vraća odmah — sa 1 bajtom ako je taster pritisnut, inače sa 0 bajtova.
+//  Time je čitanje neblokirajuće i po jednom znaku, bez potrebe za O_NONBLOCK.
 // ======================================================================
 void Emulator::termInit() {
-    if (isatty(STDIN_FILENO)) {
-        if (tcgetattr(STDIN_FILENO, &savedTermios_) == 0) {
-            termios raw = savedTermios_;
-            raw.c_lflag &= ~(ICANON | ECHO);   // bez linijskog baferisanja i bez eha
-            raw.c_cc[VMIN]  = 0;
-            raw.c_cc[VTIME] = 0;
-            // Označi terminal sirovim samo ako je postavljanje zaista uspelo.
-            if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) == 0) ttyRaw_ = true;
-        }
+    if (isatty(STDIN_FILENO) && tcgetattr(STDIN_FILENO, &savedTermios_) == 0) {
+        termios raw = savedTermios_;
+        raw.c_lflag &= ~(ICANON | ECHO);   // bez linijskog baferisanja i bez eha
+        raw.c_cc[VMIN]  = 0;               // read() ne čeka: 0 bajtova ako nema tastera
+        raw.c_cc[VTIME] = 0;               // i bez tajmauta
+        // Označi terminal sirovim samo ako je postavljanje zaista uspelo.
+        if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) == 0) termiosChanged_ = true;
     }
-    int fl = fcntl(STDIN_FILENO, F_GETFL, 0);   // neblokirajuće čitanje tastature
-    if (fl != -1 && fcntl(STDIN_FILENO, F_SETFL, fl | O_NONBLOCK) != -1)
-        savedFl_ = fl;                          // zapamti za vraćanje samo ako je uspelo
 }
 
 void Emulator::termRestore() {
-    if (ttyRaw_) {
+    if (termiosChanged_) {
         tcsetattr(STDIN_FILENO, TCSANOW, &savedTermios_);
-        ttyRaw_ = false;
-    }
-    if (savedFl_ != -1) {
-        fcntl(STDIN_FILENO, F_SETFL, savedFl_);   // vrati originalne zastavice (skini O_NONBLOCK)
-        savedFl_ = -1;
+        termiosChanged_ = false;
     }
 }
 
