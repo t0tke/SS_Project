@@ -4,9 +4,9 @@
 // objektnog modela (objfile.hpp), agregira istoimene sekcije, razrešava
 // simbole i relokacije i generiše izlaz u -hex ili -relocatable režimu.
 //
-// Tok rada (run): najpre se UČITAJU I VALIDIRAJU svi ulazni fajlovi; tek
-// potom se formiraju agregirane sekcije, tabela simbola i relokacije, pa
-// se izvršava povezivanje.
+// Tok rada (run): najpre se UČITAJU svi ulazni fajlovi (strukturu proverava
+// objReadBinary); tek potom se formiraju agregirane sekcije, tabela simbola i
+// relokacije, pa se izvršava povezivanje.
 
 #include "linker.hpp"
 #include <fstream>
@@ -86,8 +86,14 @@ bool Linker::parseArgs(int argc, char* argv[]) {
 }
 
 // ======================================================================
-//  Učitavanje jednog SSOB predmetnog fajla + validacija
+//  Učitavanje jednog SSOB predmetnog fajla
 // ======================================================================
+// Napomena: nema više posebne strukturne validacije modela. Strukturu (opsege,
+// duplikate, konzistentnost sekcija/simbola/relokacija) garantuje objReadBinary,
+// a invarijantu "relokacija po imenu referiše samo GLOBALAN simbol" garantuje
+// asembler (Assembler::backpatch odbija relokaciju na nedefinisan lokalan simbol)
+// i čuva je -relocatable izlaz (writeRelocatable), koji su jedini producenti
+// ulaznih fajlova.
 bool Linker::loadObject(const std::string& filename) {
     std::ifstream f(filename, std::ios::binary);
     if (!f) { std::cerr << "Error: ne mogu da otvorim '" << filename << "'\n"; return false; }
@@ -98,45 +104,7 @@ bool Linker::loadObject(const std::string& filename) {
         std::cerr << "Error: '" << filename << "' nije validan SSOB predmetni fajl\n";
         return false;
     }
-    if (!validateObject(obj)) return false;     // poruka je već ispisana
     objects_.push_back(std::move(obj));
-    return true;
-}
-
-// Strukturna provera učitanog modela (pre bilo kakvog povezivanja).
-//
-// Jedina provera koja NIJE već garantovana čitačem (objReadBinary) niti
-// producentima (asembler / -relocatable izlaz) jeste da relokacija PO IMENU
-// (ne sekcijska "._sekcija_") sme da referiše samo GLOBALAN simbol.
-//
-// Zašto je nužna: asembler može da emituje relokaciju na nedefinisan LOKALAN
-// simbol (simbol koji je korišćen, a nikad definisan niti .extern; definisan
-// lokalan simbol bi u backpatch-u bio pretvoren u sekcijsku relokaciju). Takav
-// simbol ne sme da bude razrešen istoimenim globalom iz drugog fajla. Bez ove
-// provere -relocatable izlaz bi tih lokalan UND simbol tiho promovisao u
-// globalan UND (writeRelocatable, deo "c"), a ona je i preduslov zbog kog je
-// drugi prolazak checkUnresolved() suvišan.
-//
-// Ostale nekadašnje provere su uklonjene jer ih drugi delovi već garantuju:
-//  - "svaka sekcija iz redosleda postoji": objReadBinary sekciju upisuje u
-//    sectionOrder i u sections istovremeno, pa je poklapanje zagarantovano;
-//  - "sekcijska relokacija referiše postojeću sekciju": asembler generiše samo
-//    "._sekcija_" za realne sekcije, a -relocatable ih prenosi u mergedOrder_;
-//  - "relokacija po imenu ima simbol u symtab-u": asembler za svaki referisani
-//    simbol ubaci stub (ensureSymStub), a -relocatable ga prenosi.
-bool Linker::validateObject(const LoadedObject& obj) {
-    const ObjectModel& m = obj.model;
-    for (auto& scKV : m.sections) {
-        for (auto& r : scKV.second.relocs) {
-            if (!r.symbol.empty() && r.symbol[0] == '.') continue;   // sekcijska relokacija
-            auto sit = m.symtab.find(r.symbol);
-            if (sit == m.symtab.end() || !sit->second.isGlobal) {
-                std::cerr << "Error: '" << obj.filename << "': referenca na nedefinisan lokalan simbol '"
-                          << r.symbol << "' (nedostaje definicija ili .extern)\n";
-                return false;
-            }
-        }
-    }
     return true;
 }
 
@@ -292,12 +260,13 @@ bool Linker::checkUnresolved() {
     // Svaki nedefinisan GLOBAL simbol (uključujući nekorišćene .extern) koji nije
     // definisan ni u jednom ulazu je nerazrešen.
     //
-    // Zaseban prolazak kroz relokacije je suvišan: relokacija po imenu (validate-
-    // Object garantuje da referiše GLOBALAN simbol) čiji simbol nije u globalDefs_
-    // znači da taj simbol nigde nije definisan kao globalan; tada u objektu koji
-    // nosi relokaciju postoji njegov globalan+nedefinisan unos u symtab-u, pa ga
-    // ova petlja već prijavljuje. To je i preduslov koji applyRelocations() koristi
-    // (globalDefs_.at(symbol) je bezbedan jer nerazrešeni ulaz ovde vraća grešku).
+    // Zaseban prolazak kroz relokacije je suvišan: relokacija po imenu referiše
+    // samo GLOBALAN simbol (garantuje asembler u backpatch-u, a čuva -relocatable
+    // izlaz). Ako takav simbol nije u globalDefs_, nigde nije definisan kao
+    // globalan; tada u objektu koji nosi relokaciju postoji njegov globalan+
+    // nedefinisan unos u symtab-u, pa ga ova petlja već prijavljuje. To je i
+    // preduslov koji applyRelocations() koristi (globalDefs_.at(symbol) je bezbedan
+    // jer nerazrešeni ulaz ovde vraća grešku).
     for (auto& obj : objects_)
         for (auto& kv : obj.model.symtab) {
             const Symbol& s = kv.second;
@@ -496,7 +465,7 @@ bool Linker::writeRelocatable() {
 int Linker::run(int argc, char* argv[]) {
     if (!parseArgs(argc, argv)) return 1;
 
-    // 1) Najpre učitaj i validiraj SVE ulazne fajlove.
+    // 1) Najpre učitaj SVE ulazne fajlove (strukturu proverava objReadBinary).
     for (auto& file : inputFiles_)
         if (!loadObject(file)) return 1;
 

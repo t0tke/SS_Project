@@ -63,7 +63,6 @@ private:
     // faze rada
     bool parseArgs(int argc, char* argv[]);
     bool loadObject(const std::string& filename);
-    bool validateObject(const LoadedObject& obj);   // strukturna provera učitanog modela
     bool mergeSections();
     bool collectGlobalDefs();                        // + detekcija višestrukih definicija
    

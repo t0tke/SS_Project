@@ -133,7 +133,15 @@ void Assembler::backpatch() {
         std::vector<RelEntry> keep;
         for (auto& rel : sec.relocs) {
             auto it=symtab_.find(rel.symbol);
-            if (it==symtab_.end()) { keep.push_back(rel); continue; }
+            // backpatch se poziva TEK nakon kompletnog parsiranja, pa je tabela
+            // simbola potpuna: lokalna labela definisana kasnije u fajlu je ovde
+            // već isDefined (biće razrešena u sekcijsku relokaciju ispod). Simbol
+            // koji ni tada ne postoji u tabeli može biti samo referenca na
+            // nedefinisan lokalan simbol -> greška asemblera.
+            if (it==symtab_.end()) {
+                fprintf(stderr,"Error: referenca na nedefinisan lokalan simbol '%s' (nedostaje definicija ili .extern)\n",rel.symbol.c_str());
+                exit(1);
+            }
             Symbol sym=it->second;
             if (!sym.isGlobal&&sym.section==sn&&sym.isDefined) {
                 uint32_t v=(uint32_t)(sym.value+rel.addend);
@@ -147,6 +155,15 @@ void Assembler::backpatch() {
                 patch32(sec,rel.offset,(uint32_t)ad);
                 RelEntry r2; r2.offset=rel.offset;
                 r2.symbol="."+sym.section; r2.addend=ad; keep.push_back(r2); continue;
+            }
+            // Ovde dolaze samo simboli koje asembler ostavlja linkeru: globalni
+            // (definisani) i .extern/nedefinisani globalni. Ako je simbol lokalan,
+            // onda je (pošto ga gornje grane nisu razrešile) lokalan nedefinisan
+            // -> greška: linker takav simbol ne sme da razreši istoimenim globalom
+            // iz drugog fajla. (Ranije je ovo hvatao Linker::validateObject.)
+            if (!sym.isGlobal) {
+                fprintf(stderr,"Error: referenca na nedefinisan lokalan simbol '%s' (nedostaje definicija ili .extern)\n",rel.symbol.c_str());
+                exit(1);
             }
             keep.push_back(rel);
         }
