@@ -24,11 +24,10 @@ struct Symbol {
     Symbol() : type(SymbolType::UND), value(0), section("UND"), isGlobal(false), isDefined(false) {}
 };
 
-struct RelEntry { 
-    int offset; 
-    std::string type; // U tvojim metodama koristiš stringove poput "ABS_32", "PC_REL"
-    std::string symbol; 
-    int addend; 
+struct RelEntry {
+    int offset;
+    std::string symbol;
+    int addend;
 };
 
 struct PoolEntry { 
@@ -111,7 +110,7 @@ private:
     void addToPool(const std::string& lit, int instrPos);
     void flushPool(SectionInfo& sec);
     void flushCurrentPool();
-    void addReloc(SectionInfo& sec, int off, const std::string& t, const std::string& sym, int addend);
+    void addReloc(SectionInfo& sec, int off, const std::string& sym, int addend);
     void backpatch();
 
     // Predmetni fajl: binarni ("-o" fajl) + čitljivi tekstualni prikaz.

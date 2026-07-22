@@ -104,45 +104,36 @@ bool Linker::loadObject(const std::string& filename) {
 }
 
 // Strukturna provera učitanog modela (pre bilo kakvog povezivanja).
+//
+// Jedina provera koja NIJE već garantovana čitačem (objReadBinary) niti
+// producentima (asembler / -relocatable izlaz) jeste da relokacija PO IMENU
+// (ne sekcijska "._sekcija_") sme da referiše samo GLOBALAN simbol.
+//
+// Zašto je nužna: asembler može da emituje relokaciju na nedefinisan LOKALAN
+// simbol (simbol koji je korišćen, a nikad definisan niti .extern; definisan
+// lokalan simbol bi u backpatch-u bio pretvoren u sekcijsku relokaciju). Takav
+// simbol ne sme da bude razrešen istoimenim globalom iz drugog fajla. Bez ove
+// provere -relocatable izlaz bi tih lokalan UND simbol tiho promovisao u
+// globalan UND (writeRelocatable, deo "c"), a ona je i preduslov zbog kog je
+// drugi prolazak checkUnresolved() suvišan.
+//
+// Ostale nekadašnje provere su uklonjene jer ih drugi delovi već garantuju:
+//  - "svaka sekcija iz redosleda postoji": objReadBinary sekciju upisuje u
+//    sectionOrder i u sections istovremeno, pa je poklapanje zagarantovano;
+//  - "sekcijska relokacija referiše postojeću sekciju": asembler generiše samo
+//    "._sekcija_" za realne sekcije, a -relocatable ih prenosi u mergedOrder_;
+//  - "relokacija po imenu ima simbol u symtab-u": asembler za svaki referisani
+//    simbol ubaci stub (ensureSymStub), a -relocatable ga prenosi.
 bool Linker::validateObject(const LoadedObject& obj) {
     const ObjectModel& m = obj.model;
-
-    // Svaka sekcija iz redosleda mora postojati.
-    for (auto& sn : m.sectionOrder) {
-        if (!m.sections.count(sn)) {
-            std::cerr << "Error: '" << obj.filename << "': sekcija '" << sn
-                      << "' navedena u redosledu ne postoji\n";
-            return false;
-        }
-    }
-    // Relokacije: postojanje ciljnog simbola/sekcije.
-    // (Opseg r.offset+4 <= data.size() je već garantovao objReadBinary pri učitavanju.)
     for (auto& scKV : m.sections) {
-        const ObjSectionData& sec = scKV.second;
-        for (auto& r : sec.relocs) {
-            if (!r.symbol.empty() && r.symbol[0] == '.') {
-                std::string refSec = r.symbol.substr(1);
-                if (!m.sections.count(refSec)) {
-                    std::cerr << "Error: '" << obj.filename << "': relokacija referiše nepostojeću sekciju '"
-                              << refSec << "'\n";
-                    return false;
-                }
-            } else {
-                auto sit = m.symtab.find(r.symbol);
-                if (sit == m.symtab.end()) {
-                    std::cerr << "Error: '" << obj.filename << "': relokacija referiše nepoznat simbol '"
-                              << r.symbol << "'\n";
-                    return false;
-                }
-                // Relokacija po imenu na LOKALAN simbol znači referencu na nedefinisan
-                // lokalan simbol (definisan lokalan bi bio pretvoren u sekcijsku
-                // relokaciju u asembleru). Takav simbol NIKAD ne sme da bude razrešen
-                // globalnim simbolom istog imena iz drugog fajla.
-                if (!sit->second.isGlobal) {
-                    std::cerr << "Error: '" << obj.filename << "': referenca na nedefinisan lokalan simbol '"
-                              << r.symbol << "' (nedostaje definicija ili .extern)\n";
-                    return false;
-                }
+        for (auto& r : scKV.second.relocs) {
+            if (!r.symbol.empty() && r.symbol[0] == '.') continue;   // sekcijska relokacija
+            auto sit = m.symtab.find(r.symbol);
+            if (sit == m.symtab.end() || !sit->second.isGlobal) {
+                std::cerr << "Error: '" << obj.filename << "': referenca na nedefinisan lokalan simbol '"
+                          << r.symbol << "' (nedostaje definicija ili .extern)\n";
+                return false;
             }
         }
     }
@@ -298,8 +289,15 @@ bool Linker::checkUnresolved() {
         }
     };
 
-    // (1) Svaki nedefinisan GLOBAL simbol (uključujući nekorišćene .extern) koji
-    //     nije definisan ni u jednom ulazu je nerazrešen.
+    // Svaki nedefinisan GLOBAL simbol (uključujući nekorišćene .extern) koji nije
+    // definisan ni u jednom ulazu je nerazrešen.
+    //
+    // Zaseban prolazak kroz relokacije je suvišan: relokacija po imenu (validate-
+    // Object garantuje da referiše GLOBALAN simbol) čiji simbol nije u globalDefs_
+    // znači da taj simbol nigde nije definisan kao globalan; tada u objektu koji
+    // nosi relokaciju postoji njegov globalan+nedefinisan unos u symtab-u, pa ga
+    // ova petlja već prijavljuje. To je i preduslov koji applyRelocations() koristi
+    // (globalDefs_.at(symbol) je bezbedan jer nerazrešeni ulaz ovde vraća grešku).
     for (auto& obj : objects_)
         for (auto& kv : obj.model.symtab) {
             const Symbol& s = kv.second;
@@ -307,15 +305,6 @@ bool Linker::checkUnresolved() {
             if (s.isGlobal && !s.isDefined && !globalDefs_.count(kv.first))
                 report(kv.first);
         }
-
-    // (2) Sigurnosna provera: svaka relokacija po imenu mora imati definiciju.
-    //     (Lokalne nedefinisane reference su već odbijene u validateObject.)
-    for (auto& obj : objects_)
-        for (auto& scKV : obj.model.sections)
-            for (auto& r : scKV.second.relocs) {
-                if (!r.symbol.empty() && r.symbol[0] == '.') continue;
-                if (!globalDefs_.count(r.symbol)) report(r.symbol);
-            }
 
     return ok;
 }

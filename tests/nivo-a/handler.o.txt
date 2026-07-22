@@ -1,0 +1,32 @@
+#SYMTAB
+Name                Type     Bind    Def  Section           Value
+--------------------------------------------------------------------
+.my_handler         SECTION  LOCAL   yes  my_handler        0x00000000
+finish              LABEL    LOCAL   yes  my_handler        0x00000024
+handle_software     LABEL    LOCAL   yes  my_handler        0x00000044
+handle_terminal     LABEL    LOCAL   yes  my_handler        0x0000003c
+handle_timer        LABEL    LOCAL   yes  my_handler        0x00000034
+handler             LABEL    GLOBAL  yes  my_handler        0x00000000
+isr_software        UND      GLOBAL  no   UND               0x00000000
+isr_terminal        UND      GLOBAL  no   UND               0x00000000
+isr_timer           UND      GLOBAL  no   UND               0x00000000
+
+#SECTION my_handler size=104
+0000: fc 1f e0 81 fc 2f e0 81 00 00 12 90 02 00 20 91 
+0010: 38 20 f1 39 03 00 20 91 34 20 f1 39 04 00 20 91 
+0020: 30 20 f1 39 04 00 2e 93 04 00 1e 93 04 00 0e 96 
+0030: 08 00 fe 93 20 00 f0 21 20 00 f0 38 20 00 f0 21 
+0040: 18 00 f0 38 1c 00 f0 21 10 00 f0 38 34 00 00 00 
+0050: 3c 00 00 00 44 00 00 00 00 00 00 00 24 00 00 00 
+0060: 00 00 00 00 00 00 00 00 
+#RELA my_handler count=7
+Offset      Symbol                Addend
+----------------------------------------
+0x0000004c  .my_handler           52
+0x00000050  .my_handler           60
+0x00000054  .my_handler           68
+0x00000058  isr_timer             0
+0x0000005c  .my_handler           36
+0x00000060  isr_terminal          0
+0x00000064  isr_software          0
+

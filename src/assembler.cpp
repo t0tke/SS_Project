@@ -99,7 +99,7 @@ void Assembler::flushPool(SectionInfo& sec) {
             appendLE32(sec, v);
         } else {
             appendLE32(sec, 0);
-            addReloc(sec,slotPos,"ABS_32",entry.value,0);
+            addReloc(sec,slotPos,entry.value,0);
         }
         for (int pos : entry.instrPos) {
             int disp=slotPos-(pos+4);
@@ -115,8 +115,8 @@ void Assembler::flushPool(SectionInfo& sec) {
 }
 void Assembler::flushCurrentPool() { if (!curSection_.empty()) flushPool(sections_[curSection_]); }
 
-void Assembler::addReloc(SectionInfo& sec, int off, const std::string& type, const std::string& sym, int addend) {
-    RelEntry r; r.offset=off; r.type=type; r.symbol=sym; r.addend=addend;
+void Assembler::addReloc(SectionInfo& sec, int off, const std::string& sym, int addend) {
+    RelEntry r; r.offset=off; r.symbol=sym; r.addend=addend;
     sec.relocs.push_back(r);
 }
 
@@ -136,18 +136,16 @@ void Assembler::backpatch() {
             if (it==symtab_.end()) { keep.push_back(rel); continue; }
             Symbol sym=it->second;
             if (!sym.isGlobal&&sym.section==sn&&sym.isDefined) {
-                if (rel.type=="ABS_32") {
-                    uint32_t v=(uint32_t)(sym.value+rel.addend);
-                    patch32(sec,rel.offset,v);
-                    RelEntry r2; r2.offset=rel.offset; r2.type="ABS_32";
-                    r2.symbol="."+sn; r2.addend=(int)v; keep.push_back(r2);
-                }
+                uint32_t v=(uint32_t)(sym.value+rel.addend);
+                patch32(sec,rel.offset,v);
+                RelEntry r2; r2.offset=rel.offset;
+                r2.symbol="."+sn; r2.addend=(int)v; keep.push_back(r2);
                 continue;
             }
             if (!sym.isGlobal&&sym.section!="UND"&&sym.isDefined) {
                 int ad=sym.value+rel.addend;
                 patch32(sec,rel.offset,(uint32_t)ad);
-                RelEntry r2; r2.offset=rel.offset; r2.type="ABS_32";
+                RelEntry r2; r2.offset=rel.offset;
                 r2.symbol="."+sym.section; r2.addend=ad; keep.push_back(r2); continue;
             }
             keep.push_back(rel);
@@ -218,7 +216,7 @@ void Assembler::directiveWordSym(const char* symName) {
     std::string n(symName); ensureSymStub(n);
     int off=lc();
     emit32(0);
-    addReloc(curSec(),off,"ABS_32",n,0);
+    addReloc(curSec(),off,n,0);
 }
 void Assembler::directiveSkip(const char* numStr) {
     int n=(int)strtol(numStr,nullptr,0);

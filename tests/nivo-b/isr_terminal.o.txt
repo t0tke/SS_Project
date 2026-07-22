@@ -1,0 +1,25 @@
+#SYMTAB
+Name                Type     Bind    Def  Section           Value
+--------------------------------------------------------------------
+.isr                SECTION  LOCAL   yes  isr               0x00000000
+isr_terminal        LABEL    GLOBAL  yes  isr               0x00000000
+message_start       LABEL    LOCAL   yes  isr               0x00000064
+my_counter          UND      GLOBAL  no   UND               0x00000000
+skip                LABEL    LOCAL   yes  isr               0x00000058
+
+#SECTION isr size=125
+0000: fc 1f e0 81 fc 2f e0 81 5d 00 1f 92 00 00 11 92 
+0010: 79 00 20 91 55 20 f1 3a 55 00 1f 92 00 00 21 92 
+0020: 51 20 f0 82 01 00 21 92 49 20 f0 82 02 00 21 92 
+0030: 41 20 f0 82 03 00 21 92 39 20 f0 82 04 00 21 92 
+0040: 31 20 f0 82 31 00 1f 92 00 00 11 92 01 00 20 91 
+0050: 00 20 11 50 21 10 f0 82 04 00 2e 93 04 00 1e 93 
+0060: 04 00 fe 93 70 72 65 73 73 04 ff ff ff 58 00 00 
+0070: 00 64 00 00 00 00 ff ff ff 00 00 00 00 
+#RELA isr count=3
+Offset      Symbol                Addend
+----------------------------------------
+0x0000006d  .isr                  88
+0x00000071  .isr                  100
+0x00000079  my_counter            0
+

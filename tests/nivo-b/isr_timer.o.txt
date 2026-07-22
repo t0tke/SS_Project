@@ -1,0 +1,9 @@
+#SYMTAB
+Name                Type     Bind    Def  Section           Value
+--------------------------------------------------------------------
+.isr                SECTION  LOCAL   yes  isr               0x00000000
+isr_timer           LABEL    GLOBAL  yes  isr               0x00000000
+
+#SECTION isr size=4
+0000: 04 00 fe 93 
+

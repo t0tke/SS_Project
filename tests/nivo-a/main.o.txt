@@ -1,0 +1,55 @@
+#SYMTAB
+Name                Type     Bind    Def  Section           Value
+--------------------------------------------------------------------
+.my_code            SECTION  LOCAL   yes  my_code           0x00000000
+.my_data            SECTION  LOCAL   yes  my_data           0x00000000
+handler             UND      GLOBAL  no   UND               0x00000000
+mathAdd             UND      GLOBAL  no   UND               0x00000000
+mathDiv             UND      GLOBAL  no   UND               0x00000000
+mathMul             UND      GLOBAL  no   UND               0x00000000
+mathSub             UND      GLOBAL  no   UND               0x00000000
+my_start            LABEL    GLOBAL  yes  my_code           0x00000000
+value1              LABEL    GLOBAL  yes  my_data           0x00000000
+value2              LABEL    GLOBAL  yes  my_data           0x00000004
+value3              LABEL    GLOBAL  yes  my_data           0x00000008
+value4              LABEL    GLOBAL  yes  my_data           0x0000000c
+value5              LABEL    GLOBAL  yes  my_data           0x00000010
+value6              LABEL    GLOBAL  yes  my_data           0x00000014
+value7              LABEL    GLOBAL  yes  my_data           0x00000018
+
+#SECTION my_code size=244
+0000: fe 0e e0 91 bc 00 1f 92 00 00 11 94 00 00 00 10 
+0010: 01 00 10 91 fc 1f e0 81 01 00 10 91 fc 1f e0 81 
+0020: a4 00 f0 21 a4 10 f0 82 02 00 10 91 fc 1f e0 81 
+0030: 01 00 10 91 fc 1f e0 81 94 00 f0 21 94 10 f0 82 
+0040: 07 00 10 91 fc 1f e0 81 0b 00 10 91 fc 1f e0 81 
+0050: 84 00 f0 21 84 10 f0 82 05 00 10 91 fc 1f e0 81 
+0060: 19 00 10 91 fc 1f e0 81 74 00 f0 21 74 10 f0 82 
+0070: 04 00 10 91 fc 1f e0 81 18 00 10 91 fc 1f e0 81 
+0080: 5c 00 f0 21 60 10 f0 82 60 00 1f 92 00 00 11 92 
+0090: 38 00 2f 92 00 00 22 92 38 00 3f 92 00 00 33 92 
+00a0: 38 00 4f 92 00 00 44 92 38 00 5f 92 00 00 55 92 
+00b0: 34 00 6f 92 00 00 66 92 34 00 7f 92 00 00 77 92 
+00c0: 00 00 00 00 00 00 00 00 00 00 00 f0 00 00 00 00 
+00d0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+00e0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+00f0: 00 00 00 00 
+#RELA my_code count=11
+Offset      Symbol                Addend
+----------------------------------------
+0x000000c4  handler               0
+0x000000cc  value2                0
+0x000000d0  mathAdd               0
+0x000000d4  value3                0
+0x000000d8  mathSub               0
+0x000000dc  value4                0
+0x000000e0  mathDiv               0
+0x000000e4  value5                0
+0x000000e8  value6                0
+0x000000ec  value1                0
+0x000000f0  value7                0
+
+#SECTION my_data size=28
+0000: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+0010: 00 00 00 00 00 00 00 00 00 00 00 00 
+
