@@ -16,9 +16,9 @@ namespace {
     constexpr uint32_t TERM_IN    = 0xFFFFFF04u;    // registar ulaznih podataka terminala
 
     // Indeksi kontrolnih/statusnih registara (csr_).
-    constexpr int CSR_STATUS  = 0;
-    constexpr int CSR_HANDLER = 1;
-    constexpr int CSR_CAUSE   = 2;
+    constexpr int CSR_STATUS_INDEX  = 0;
+    constexpr int CSR_HANDLER_INDEX    = 1;
+    constexpr int CSR_CAUSE_INDEX   = 2;
 
     // Raspored flegova statusne reči prema dijagramu postavke: bit0=Tr, bit1=Tl,
     // bit2=I; za svaki 0=omogućeno, 1=maskirano. Tr (tajmer) je nivo C i ovde se ne koristi.
@@ -29,11 +29,6 @@ namespace {
     constexpr uint32_t CAUSE_BAD_INSTR = 1;   // nekorektna instrukcija
     constexpr uint32_t CAUSE_TERMINAL  = 3;   // zahtev za prekid od terminala
     constexpr uint32_t CAUSE_SOFTWARE  = 4;   // softverski prekid (int)
-
-    // Znakovno proširenje 12-bitnog pomeraja na 32-bitni označeni broj.
-    int32_t signExt12(uint32_t d) {
-        return (int32_t)(d<<20) >> 20;
-    }
 }
 
 // ======================================================================
@@ -112,19 +107,19 @@ bool Emulator::loadHex(const std::string& path) {
 // ======================================================================
 void Emulator::enterInterrupt(uint32_t cause) {
     uint32_t sp = gpr[14];
-    sp -= 4; store32(sp, csr[CSR_STATUS]);
+    sp -= 4; store32(sp, csr[CSR_STATUS_INDEX]);
     sp -= 4; store32(sp, gpr[15]);
     gpr[14] = sp;
 
-    csr[CSR_CAUSE]   = cause;
-    csr[CSR_STATUS] |= ST_I;           // globalno maskiranje prekida (postavka)
-    gpr[15]          = csr[CSR_HANDLER];
+    csr[CSR_CAUSE_INDEX]   = cause;
+    csr[CSR_STATUS_INDEX] |= ST_I;           // globalno maskiranje prekida (postavka)
+    gpr[15]          = csr[CSR_HANDLER_INDEX   ];
 }
 
 // ======================================================================
 //  Terminal: očitavanje tastature (bez baferisanja, neblokirajuće)
 // ======================================================================
-void Emulator::pollTerminal() {
+void Emulator::checkTerminalInput() {
     unsigned char ch;
     ssize_t n = ::read(STDIN_FILENO, &ch, 1);
     if (n == 1) {
@@ -147,7 +142,7 @@ void Emulator::step() {
     uint32_t a   = (word >> 20) & 0xF;
     uint32_t b   = (word >> 16) & 0xF;
     uint32_t c   = (word >> 12) & 0xF;
-    int32_t  D   = signExt12(word & 0xFFF);
+    int32_t  D   = (int32_t)((word & 0xFFF)<<20) >> 20;
 
     switch (oc) {
     case 0x0:   // halt
@@ -193,22 +188,22 @@ void Emulator::step() {
         if (mod != 0x0) { enterInterrupt(CAUSE_BAD_INSTR); return; }
         {
             uint32_t tmp = gpr[b];
-            setReg(b, gpr[c]);
-            setReg(c, tmp);
+            setGpr(b, gpr[c]);
+            setGpr(c, tmp);
         }
         return;
 
     case 0x5:   // aritmetičke operacije
         switch (mod) {
-            case 0x0: setReg(a, gpr[b] + gpr[c]); return;
-            case 0x1: setReg(a, gpr[b] - gpr[c]); return;
-            case 0x2: setReg(a, gpr[b] * gpr[c]); return;
+            case 0x0: setGpr(a, gpr[b] + gpr[c]); return;
+            case 0x1: setGpr(a, gpr[b] - gpr[c]); return;
+            case 0x2: setGpr(a, gpr[b] * gpr[c]); return;
             case 0x3: {
                 int32_t bb = (int32_t)gpr[b], cc = (int32_t)gpr[c];
                 if (cc == 0) { enterInterrupt(CAUSE_BAD_INSTR); return; }   // deljenje nulom
                 uint32_t res = (bb == INT32_MIN && cc == -1)
                                  ? (uint32_t)INT32_MIN : (uint32_t)(bb / cc);
-                setReg(a, res);
+                setGpr(a, res);
                 return;
             }
             default: enterInterrupt(CAUSE_BAD_INSTR); return;
@@ -216,10 +211,10 @@ void Emulator::step() {
 
     case 0x6:   // logičke operacije
         switch (mod) {
-            case 0x0: setReg(a, ~gpr[b]);          return;
-            case 0x1: setReg(a, gpr[b] & gpr[c]);  return;
-            case 0x2: setReg(a, gpr[b] | gpr[c]);  return;
-            case 0x3: setReg(a, gpr[b] ^ gpr[c]);  return;
+            case 0x0: setGpr(a, ~gpr[b]);          return;
+            case 0x1: setGpr(a, gpr[b] & gpr[c]);  return;
+            case 0x2: setGpr(a, gpr[b] | gpr[c]);  return;
+            case 0x3: setGpr(a, gpr[b] ^ gpr[c]);  return;
             default:  enterInterrupt(CAUSE_BAD_INSTR); return;
         }
 
@@ -227,8 +222,8 @@ void Emulator::step() {
     {
         uint32_t sh = gpr[c];
         switch (mod) {
-            case 0x0: setReg(a, sh >= 32 ? 0 : (gpr[b] << sh)); return;
-            case 0x1: setReg(a, sh >= 32 ? 0 : (gpr[b] >> sh)); return;
+            case 0x0: setGpr(a, sh >= 32 ? 0 : (gpr[b] << sh)); return;
+            case 0x1: setGpr(a, sh >= 32 ? 0 : (gpr[b] >> sh)); return;
             default:  enterInterrupt(CAUSE_BAD_INSTR);          return;
         }
     }
@@ -238,7 +233,7 @@ void Emulator::step() {
             case 0x0: store32(gpr[a] + gpr[b] + (uint32_t)D, gpr[c]); return;
             case 0x2: store32(load32(gpr[a] + gpr[b] + (uint32_t)D), gpr[c]); return;
             case 0x1: {   // gpr[A]<=gpr[A]+D; mem32[gpr[A]]<=gpr[C]  (push)
-                setReg(a, gpr[a] + (uint32_t)D);
+                setGpr(a, gpr[a] + (uint32_t)D);
                 store32(gpr[a], gpr[c]);
                 return;
             }
@@ -249,19 +244,19 @@ void Emulator::step() {
         switch (mod) {
             case 0x0:   // gpr[A]<=csr[B]
                 if (b > 2) { enterInterrupt(CAUSE_BAD_INSTR); return; }
-                setReg(a, csr[b]);
+                setGpr(a, csr[b]);
                 return;
             case 0x1:   // gpr[A]<=gpr[B]+D
-                setReg(a, gpr[b] + (uint32_t)D);
+                setGpr(a, gpr[b] + (uint32_t)D);
                 return;
             case 0x2:   // gpr[A]<=mem32[gpr[B]+gpr[C]+D]
-                setReg(a, load32(gpr[b] + gpr[c] + (uint32_t)D));
+                setGpr(a, load32(gpr[b] + gpr[c] + (uint32_t)D));
                 return;
             case 0x3: // gpr[A]<=mem32[gpr[B]]; gpr[B]<=gpr[B]+D  (post-inkrement)
                 // Redosled iz postavke: prvo upiši A (čita staro gpr[B]), pa tek onda
                 // uvećaj B. Kada je A==B, ovo daje mem32[stari gpr[B]]+D (npr. pop %sp).
-                setReg(a, load32(gpr[b]));
-                setReg(b, gpr[b] + (uint32_t)D);
+                setGpr(a, load32(gpr[b]));
+                setGpr(b, gpr[b] + (uint32_t)D);
                 return;
             case 0x4:   // csr[A]<=gpr[B]
                 if (a > 2) { enterInterrupt(CAUSE_BAD_INSTR); return; }
@@ -279,7 +274,7 @@ void Emulator::step() {
                 if (a > 2) { enterInterrupt(CAUSE_BAD_INSTR); return; }
                 uint32_t v = load32(gpr[b]);
                 csr[a] = v;
-                setReg(b, gpr[b] + (uint32_t)D);
+                setGpr(b, gpr[b] + (uint32_t)D);
                 return;
             }
             default: enterInterrupt(CAUSE_BAD_INSTR); return;
@@ -294,7 +289,7 @@ void Emulator::step() {
 // ======================================================================
 //  Ispis stanja procesora nakon halt instrukcije
 // ======================================================================
-void Emulator::dumpState() const {
+void Emulator::printProcessorState() const {
     std::printf("-----------------------------------------------------------------\n");
     std::printf("Emulated processor executed halt instruction\n");
     std::printf("Emulated processor state:\n");
@@ -349,9 +344,9 @@ int Emulator::run(int argc, char* argv[]) {
 
     while (running) {
         // 1) Očitaj tastaturu i, ako nije maskiran, opsluži prekid od terminala.
-        pollTerminal();
-        if (termPending_ && (csr[CSR_STATUS] & ST_I) == 0
-                         && (csr[CSR_STATUS] & ST_TL) == 0) {
+        checkTerminalInput();
+        if (termPending_ && (csr[CSR_STATUS_INDEX] & ST_I) == 0
+                         && (csr[CSR_STATUS_INDEX] & ST_TL) == 0) {
             termPending_ = false;
             enterInterrupt(CAUSE_TERMINAL);
         }
@@ -360,7 +355,7 @@ int Emulator::run(int argc, char* argv[]) {
     }
 
     termRestore();
-    dumpState();
+    printProcessorState();
     return 0;
 }
 

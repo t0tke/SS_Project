@@ -32,7 +32,7 @@ private:
     // ---- Terminal ----
     uint32_t termIn_      = 0;       // poslednji pritisnut taster (term_in registar)
     bool     termPending_ = false;   // neisporučen zahtev za prekid od terminala
-    bool     termiosChanged_      = false;   // da li je terminal prebačen u sirovi režim
+    bool     termiosChanged_      = false;   // da li je terminal prebačen u režim
     termios  savedTermios_{};        // originalna podešavanja terminala (za restore)
 
     // ---- Memorijski pristup (little-endian, sa memorijski mapiranim registrima) ----
@@ -43,8 +43,8 @@ private:
     bool loadHex(const std::string& path);
     void step();                     // izvrši jednu instrukciju
     void enterInterrupt(uint32_t cause);
-    void pollTerminal();
-    void dumpState() const;
+    void checkTerminalInput();
+    void printProcessorState() const;
 
     // ---- Terminal setup / restore ----
     void termInit();
@@ -52,5 +52,5 @@ private:
 
     // r0 je ožičen na nulu: upis u indeks 0 se ignoriše.
     // (Definicija u telu klase je već implicitno inline.)
-    void setReg(uint32_t i, uint32_t v) { if (i != 0) gpr[i] = v; }
+    void setGpr(uint32_t i, uint32_t v) { if (i != 0) gpr[i] = v; }
 };
