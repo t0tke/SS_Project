@@ -151,7 +151,6 @@ void Assembler::backpatch() {
 }
 
 // Sastavi neutralan model predmetnog fajla iz internog stanja asemblera.
-// Model je isti oblik koji čita i reader, pa je round-trip provera diff teksta.
 ObjectModel Assembler::buildModel() const {
     ObjectModel m;
     m.sectionOrder = sectionOrder_;

@@ -1,6 +1,4 @@
 %{
-// parser.y - Bison parser za asembler
-// Sistemski softver 2025/2026
 #include <stdio.h>
 #include <stdlib.h>
 #include "assembler.hpp"

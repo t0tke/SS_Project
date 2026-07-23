@@ -1,5 +1,4 @@
 #pragma once
-
 #include "objfile.hpp"
 #include <string>
 #include <vector>
@@ -54,7 +53,7 @@ private:
     bool parseArgs(int argc, char* argv[]);
     bool loadObject(const std::string& filename);
     bool mergeSections();
-    bool collectGlobalDefs();// + detekcija višestrukih definicija
+    bool collectGlobalDefs();//detekcija višestrukih definicija
    
     //hex
     bool placeSections();                            

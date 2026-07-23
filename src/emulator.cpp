@@ -1,5 +1,4 @@
 #include "emulator.hpp"
-
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
@@ -306,7 +305,7 @@ int Emulator::run(int argc, char* argv[]) {
             termPending_ = false;
             enterInterrupt(CAUSE_TERMINAL);
         }
-        
+
         step();
     }
 
