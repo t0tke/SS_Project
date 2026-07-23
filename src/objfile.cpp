@@ -1,18 +1,9 @@
-// objfile.cpp – SS 2025/2026
-// Implementacija tekstualnog i binarnog zapisa predmetnog fajla + čitača.
 #include "objfile.hpp"
 #include <iomanip>
 #include <cstring>
 
-// ============================================================================
-//  TEKSTUALNI PRIKAZ
-//  Identičan izgledu koji je asembler oduvek generisao (samo je izmešten ovde
-//  da bi ga delili asembler i linker). Zapisi su razdvojeni belinama,
-//  poravnanje je samo estetsko.
-// ============================================================================
+//tekstualni prikaz
 void objWriteText(std::ostream& f, const ObjectModel& m) {
-    // ---------------------------- #SYMTAB ----------------------------
-    // Kolone: Name  Type  Bind  Def  Section  Value
     f << "#SYMTAB\n"
       << std::left << std::setfill(' ')
       << std::setw(20) << "Name"
@@ -34,26 +25,23 @@ void objWriteText(std::ostream& f, const ObjectModel& m) {
           << std::dec << std::setfill(' ') << "\n";
     };
 
-    // Prvo simboli sekcija (u redosledu definisanja sekcija -> čuva redosled),
     for (auto& sectionName : m.sectionOrder) {
         std::string key = "." + sectionName;
         auto it = m.symtab.find(key);
         if (it != m.symtab.end()) emitSym(key, it->second);
     }
-    // zatim ostali simboli (labele, extern), po imenu (poredak std::map-a).
+
     for (auto& kv : m.symtab) {
         if (!kv.first.empty() && kv.first[0] == '.') continue;
         emitSym(kv.first, kv.second);
     }
     f << "\n";
 
-    // -------------------- Sekcije: sadržaj + relokacije --------------------
     for (auto& sectionName : m.sectionOrder) {
         auto sit = m.sections.find(sectionName);
         if (sit == m.sections.end()) continue;
         const ObjSectionData& sec = sit->second;
 
-        // sadržaj: 16 bajtova po redu, little-endian, ofset kao 4 hex cifre
         f << "#SECTION " << sectionName << " size=" << std::dec << sec.data.size() << "\n";
         for (size_t i = 0; i < sec.data.size(); i++) {
             if (i % 16 == 0) {
@@ -65,7 +53,6 @@ void objWriteText(std::ostream& f, const ObjectModel& m) {
         if (!sec.data.empty()) f << "\n";
         f << std::dec << std::setfill(' ');
 
-        // relokacije: bez 'Type' kolone (sve su ABS_32), count= je samoprovera
         if (!sec.relocs.empty()) {
             f << "#RELA " << sectionName << " count=" << std::dec << sec.relocs.size() << "\n"
               << std::left << std::setfill(' ')
@@ -140,7 +127,6 @@ uint32_t get32(const std::vector<uint8_t>& b, size_t off) {
          | ((uint32_t)b[off + 2] << 16) | ((uint32_t)b[off + 3] << 24);
 }
 
-// Sakupljač stringova sa deduplikacijom; string na ofsetu 0 je prazan ("").
 struct StrTab {
     std::vector<uint8_t>            bytes{0};   // vodeći NUL
     std::map<std::string, uint32_t> seen{{"", 0}};
@@ -171,8 +157,6 @@ SymbolType typeFromCode(uint8_t c) {
     }
 }
 
-// Kanonski redosled simbola u fajlu = isti kao u tekstualnom prikazu:
-// prvo simboli sekcija po redosledu sekcija, pa ostali po imenu (map poredak).
 std::vector<std::string> symbolOrder(const ObjectModel& m) {
     std::vector<std::string> order;
     for (auto& sn : m.sectionOrder) {
@@ -186,21 +170,19 @@ std::vector<std::string> symbolOrder(const ObjectModel& m) {
     return order;
 }
 
-} // namespace
+} 
 
 void objWriteBinary(std::ostream& os, const ObjectModel& m) {
     const uint32_t sectionCount = (uint32_t)m.sectionOrder.size();
     std::vector<std::string> symOrder = symbolOrder(m);
     const uint32_t symbolCount = (uint32_t)symOrder.size();
 
-    // Ukupan broj relokacija (raspoređene po sekcijama u modelu).
     uint32_t relocCount = 0;
     for (auto& sn : m.sectionOrder) {
         auto it = m.sections.find(sn);
         if (it != m.sections.end()) relocCount += (uint32_t)it->second.relocs.size();
     }
 
-    // 1) Napuni string tabelu (imena sekcija, simbola i njihovih sekcija).
     StrTab strtab;
     std::vector<uint32_t> secNameOff(sectionCount);
     for (uint32_t i = 0; i < sectionCount; i++)
@@ -211,9 +193,7 @@ void objWriteBinary(std::ostream& os, const ObjectModel& m) {
         symNameOff[i] = strtab.add(symOrder[i]);
         symSecOff[i]  = strtab.add(m.symtab.at(symOrder[i]).section);
     }
-    // Ofseti imena sekcija za relokacione zapise (već su u strtab-u).
 
-    // 2) Izračunaj apsolutne ofsete regiona.
     const uint32_t secTabOff = objfmt::HEADER_SIZE;
     const uint32_t symTabOff = secTabOff + objfmt::SEC_ENT_SIZE * sectionCount;
     const uint32_t relTabOff = symTabOff + objfmt::SYM_ENT_SIZE * symbolCount;
@@ -221,7 +201,6 @@ void objWriteBinary(std::ostream& os, const ObjectModel& m) {
     const uint32_t strtabSize = (uint32_t)strtab.bytes.size();
     const uint32_t dataBlobOff = strtabOff + strtabSize;
 
-    // dataOff za svaku sekciju (redom u data blob-u).
     std::vector<uint32_t> secDataOff(sectionCount), secDataSize(sectionCount);
     uint32_t running = dataBlobOff;
     for (uint32_t i = 0; i < sectionCount; i++) {
@@ -231,10 +210,8 @@ void objWriteBinary(std::ostream& os, const ObjectModel& m) {
         running += secDataSize[i];
     }
 
-    // 3) Serijalizuj sve u jedan bafer.
     std::vector<uint8_t> out;
 
-    // Header
     out.insert(out.end(), objfmt::MAGIC, objfmt::MAGIC + 4);
     put16(out, objfmt::VERSION);
     put16(out, objfmt::ENDIAN_LE);
@@ -243,16 +220,14 @@ void objWriteBinary(std::ostream& os, const ObjectModel& m) {
     put32(out, relocCount);
     put32(out, strtabOff);
     put32(out, strtabSize);
-    put32(out, 0); // reserved
+    put32(out, 0); 
 
-    // Section header table
     for (uint32_t i = 0; i < sectionCount; i++) {
         put32(out, secNameOff[i]);
         put32(out, secDataOff[i]);
         put32(out, secDataSize[i]);
     }
 
-    // Symbol table
     for (uint32_t i = 0; i < symbolCount; i++) {
         const Symbol& s = m.symtab.at(symOrder[i]);
         put32(out, symNameOff[i]);
@@ -264,7 +239,6 @@ void objWriteBinary(std::ostream& os, const ObjectModel& m) {
         put32(out, s.value);
     }
 
-    // Relocation table (grupisano po sekcijama, u redosledu sekcija)
     for (auto& sn : m.sectionOrder) {
         auto it = m.sections.find(sn);
         if (it == m.sections.end()) continue;
@@ -277,10 +251,8 @@ void objWriteBinary(std::ostream& os, const ObjectModel& m) {
         }
     }
 
-    // String table
     out.insert(out.end(), strtab.bytes.begin(), strtab.bytes.end());
 
-    // Section data blob
     for (uint32_t i = 0; i < sectionCount; i++) {
         const ObjSectionData& sec = m.sections.at(m.sectionOrder[i]);
         out.insert(out.end(), sec.data.begin(), sec.data.end());
@@ -296,7 +268,6 @@ bool objReadBinary(std::istream& is, ObjectModel& m) {
     if (total < objfmt::HEADER_SIZE) return false;
     if (memcmp(b.data(), objfmt::MAGIC, 4) != 0) return false;
 
-    // Verzija i endian moraju tačno da odgovaraju (inače je fajl nekompatibilan/oštećen).
     if (get16(b, 4) != objfmt::VERSION)   return false;
     if (get16(b, 6) != objfmt::ENDIAN_LE) return false;
 
@@ -306,13 +277,10 @@ bool objReadBinary(std::istream& is, ObjectModel& m) {
     const uint32_t strtabOff    = get32(b, 20);
     const uint32_t strtabSize   = get32(b, 24);
 
-    // Sva provera opsega ide preko 64-bitne aritmetike da 32-bitni sabirci
-    // ne bi mogli da se "obmotaju" (overflow) i zaobiđu granice.
     auto region = [&](uint64_t off, uint64_t len) -> bool {
-        return off <= total && len <= total - off;   // off+len <= total, bez overflow-a
+        return off <= total && len <= total - off;  
     };
 
-    // String tabela: mora da stane i da se završava NUL-om (garantuje bezbedno čitanje niski).
     if (!region(strtabOff, strtabSize)) return false;
     if (strtabSize == 0 || b[strtabOff + strtabSize - 1] != 0) return false;
 
@@ -320,10 +288,9 @@ bool objReadBinary(std::istream& is, ObjectModel& m) {
     auto str = [&](uint32_t off) -> std::string {
         if (off >= strtabSize) { strOk = false; return std::string(); }
         uint64_t start = (uint64_t)strtabOff + off;
-        uint64_t limit = (uint64_t)strtabOff + strtabSize;   // poslednji bajt je NUL
+        uint64_t limit = (uint64_t)strtabOff + strtabSize;   
         uint64_t p = start;
         while (p < limit && b[p] != 0) p++;
-        // p < limit uvek važi jer je poslednji bajt NUL -> niska je ograničena.
         return std::string(reinterpret_cast<const char*>(&b[start]), (size_t)(p - start));
     };
 
@@ -331,7 +298,6 @@ bool objReadBinary(std::istream& is, ObjectModel& m) {
     m.symtab.clear();
     m.sections.clear();
 
-    // ---- Tabela zaglavlja sekcija ----
     const uint64_t secTabOff = objfmt::HEADER_SIZE;
     if (!region(secTabOff, (uint64_t)sectionCount * objfmt::SEC_ENT_SIZE)) return false;
     for (uint32_t i = 0; i < sectionCount; i++) {
@@ -340,32 +306,30 @@ bool objReadBinary(std::istream& is, ObjectModel& m) {
         uint32_t dataOff  = get32(b, e + 4);
         uint32_t dataSize = get32(b, e + 8);
         if (!region(dataOff, dataSize)) return false;
-        if (m.sections.count(name)) return false;            // duplirana sekcija
+        if (m.sections.count(name)) return false;            
         m.sectionOrder.push_back(name);
         ObjSectionData sd;
         sd.data.assign(b.begin() + dataOff, b.begin() + dataOff + dataSize);
         m.sections[name] = std::move(sd);
     }
 
-    // ---- Tabela simbola ----
     const uint64_t symTabOff = secTabOff + (uint64_t)sectionCount * objfmt::SEC_ENT_SIZE;
     if (!region(symTabOff, (uint64_t)symbolCount * objfmt::SYM_ENT_SIZE)) return false;
     for (uint32_t i = 0; i < symbolCount; i++) {
         uint64_t e = symTabOff + (uint64_t)i * objfmt::SYM_ENT_SIZE;
         std::string name = str(get32(b, e));
         uint8_t tcode = b[e + 4];
-        if (tcode > objfmt::T_SECTION) return false;         // nepoznat tip simbola
+        if (tcode > objfmt::T_SECTION) return false;        
         Symbol s;
         s.type      = typeFromCode(tcode);
         s.isGlobal  = b[e + 5] != 0;
         s.isDefined = b[e + 6] != 0;
         s.section   = str(get32(b, e + 8));
         s.value     = get32(b, e + 12);
-        if (m.symtab.count(name)) return false;              // dupliran simbol
+        if (m.symtab.count(name)) return false;             
         m.symtab[name] = s;
     }
 
-    // ---- Tabela relokacija ----
     const uint64_t relTabOff = symTabOff + (uint64_t)symbolCount * objfmt::SYM_ENT_SIZE;
     if (!region(relTabOff, (uint64_t)relocCount * objfmt::REL_ENT_SIZE)) return false;
     for (uint32_t i = 0; i < relocCount; i++) {
@@ -376,11 +340,11 @@ bool objReadBinary(std::istream& is, ObjectModel& m) {
         r.symbol = str(get32(b, e + 8));
         r.addend = (int32_t)get32(b, e + 12);
         auto it = m.sections.find(secName);
-        if (it == m.sections.end()) return false;            // relokacija za nepoznatu sekciju
-        if ((uint64_t)r.offset + 4 > it->second.data.size()) return false; // van granica sekcije
+        if (it == m.sections.end()) return false;            
+        if ((uint64_t)r.offset + 4 > it->second.data.size()) return false;
         it->second.relocs.push_back(r);
     }
 
-    if (!strOk) return false;   // neki string ofset je bio van string tabele
+    if (!strOk) return false;   
     return true;
 }

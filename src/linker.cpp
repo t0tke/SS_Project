@@ -1,13 +1,3 @@
-// linker.cpp – SS 2025/2026 – Linker (nivo B)
-//
-// Učitava sopstveni binarni SSOB predmetni format preko zajedničkog
-// objektnog modela (objfile.hpp), agregira istoimene sekcije, razrešava
-// simbole i relokacije i generiše izlaz u -hex ili -relocatable režimu.
-//
-// Tok rada (run): najpre se UČITAJU svi ulazni fajlovi (strukturu proverava
-// objReadBinary); tek potom se formiraju agregirane sekcije, tabela simbola i
-// relokacije, pa se izvršava povezivanje.
-
 #include "linker.hpp"
 #include <fstream>
 #include <iostream>
@@ -17,9 +7,7 @@
 #include <cerrno>
 #include <set>
 
-// ======================================================================
-//  Argumenti komandne linije
-// ======================================================================
+//komanda linija parsiranje
 bool Linker::parseArgs(int argc, char* argv[]) {
     for (int i = 1; i < argc; i++) {
         std::string arg(argv[i]);
@@ -42,8 +30,7 @@ bool Linker::parseArgs(int argc, char* argv[]) {
             if (secName.empty() || addrStr.empty()) {
                 std::cerr << "Error: neispravan -place format: " << arg << "\n"; return false;
             }
-            // Stroga validacija adrese: mora biti ceo broj, bez viška znakova,
-            // bez negativnog predznaka i mora da stane u 32 bita.
+
             errno = 0;
             char* endp = nullptr;
             unsigned long long v = strtoull(addrStr.c_str(), &endp, 0);
@@ -71,7 +58,6 @@ bool Linker::parseArgs(int argc, char* argv[]) {
         }
     }
 
-    // Tačno jedna od -hex / -relocatable je obavezna.
     if (hexMode_ && relocMode_) {
         std::cerr << "Error: navesti tačno jednu od opcija -hex i -relocatable (navedene obe)\n"; return false;
     }
@@ -85,15 +71,6 @@ bool Linker::parseArgs(int argc, char* argv[]) {
     return true;
 }
 
-// ======================================================================
-//  Učitavanje jednog SSOB predmetnog fajla
-// ======================================================================
-// Napomena: nema više posebne strukturne validacije modela. Strukturu (opsege,
-// duplikate, konzistentnost sekcija/simbola/relokacija) garantuje objReadBinary,
-// a invarijantu "relokacija po imenu referiše samo GLOBALAN simbol" garantuje
-// asembler (Assembler::backpatch odbija relokaciju na nedefinisan lokalan simbol)
-// i čuva je -relocatable izlaz (writeRelocatable), koji su jedini producenti
-// ulaznih fajlova.
 bool Linker::loadObject(const std::string& filename) {
     std::ifstream f(filename, std::ios::binary);
     if (!f) { std::cerr << "Error: ne mogu da otvorim '" << filename << "'\n"; return false; }
@@ -107,9 +84,6 @@ bool Linker::loadObject(const std::string& filename) {
     return true;
 }
 
-// ======================================================================
-//  Agregacija istoimenih sekcija (redosled prvog pojavljivanja)
-// ======================================================================
 bool Linker::mergeSections() {
     std::set<std::string> seen;
     for (auto& obj : objects_)
@@ -121,12 +95,10 @@ bool Linker::mergeSections() {
         for (int i = 0; i < (int)objects_.size(); i++) {
             auto it = objects_[i].model.sections.find(sn);
             if (it == objects_[i].model.sections.end()) continue;
+
             uint32_t pieceSize = (uint32_t)it->second.data.size();
-            // Agregirana veličina/ofset moraju da stanu u 32-bitni adresni prostor;
-            // preko toga bi se ofset "obmotao" i pokvario smeštanje i relokacije.
             if ((uint64_t)ms.totalSize + pieceSize > 0xFFFFFFFFull) {
-                std::cerr << "Error: agregirana sekcija '" << sn
-                          << "' prelazi 32-bitni adresni prostor\n";
+                std::cerr << "Error: agregirana sekcija '" << sn << "' prelazi 32-bitni adresni prostor\n";
                 return false;
             }
             ms.pieces.push_back({ i, ms.totalSize });
@@ -138,17 +110,16 @@ bool Linker::mergeSections() {
     return true;
 }
 
-// ======================================================================
+
 //  Globalne (izvezene) definicije + detekcija višestrukih definicija
-// ======================================================================
 bool Linker::collectGlobalDefs() {
     bool ok = true;
     for (int i = 0; i < (int)objects_.size(); i++) {
         for (auto& kv : objects_[i].model.symtab) {
             const std::string& name = kv.first;
             const Symbol&      sym  = kv.second;
-            if (sym.type == SymbolType::SECTION) continue;      // sekcijski simbol – lokalno
-            if (!sym.isGlobal || !sym.isDefined) continue;      // samo izvezene definicije
+            if (sym.type == SymbolType::SECTION) continue;
+            if (!sym.isGlobal || !sym.isDefined) continue;      
 
             if (globalDefs_.count(name)) {
                 std::cerr << "Error: višestruka definicija simbola '" << name << "'\n";
@@ -160,12 +131,7 @@ bool Linker::collectGlobalDefs() {
     return ok;
 }
 
-// ======================================================================
-//  Smeštanje sekcija (-place + podrazumevano)
-// ======================================================================
 bool Linker::placeSections() {
-    // Kraj (ekskluzivno) računamo u 64 bita: sekcija koja se završava TAČNO na
-    // 2^32 je validna (zauzima do 0xFFFFFFFF), a preko toga je greška.
     const uint64_t LIMIT = 0x100000000ull;
     uint64_t highestEnd = 0;
 
@@ -185,13 +151,10 @@ bool Linker::placeSections() {
         if (end > highestEnd) highestEnd = end;
     }
 
-    // 2) Ostale sekcije: nadovezuju se odmah iza najviše zauzete adrese,
-    //    u redosledu prvog pojavljivanja.
+    // 2) Ostale sekcije: nadovezuju se odmah iza najviše zauzete adrese, u redosledu prvog pojavljivanja.
     for (auto& sn : mergedOrder_) {
         if (placeMap_.count(sn)) continue;
-        // Baza mora biti VALIDNA 32-bitna adresa. Ako se prethodna sekcija
-        // završila tačno na 0x100000000, ova (pa i prazna) bi počela van prostora;
-        // provera je PRE kastovanja u uint32_t da se highestEnd ne bi obmotao na 0.
+
         if (highestEnd > 0xFFFFFFFFull) {
             std::cerr << "Error: sekcija '" << sn << "' počinje na adresi van 32-bitnog prostora\n";
             return false;
@@ -205,26 +168,16 @@ bool Linker::placeSections() {
         highestEnd = end;
     }
 
-    // 3) Apsolutne bazne adrese svakog parčeta. Račun je u 64 bita i proverava se
-    //    PRE kastovanja: prazno parče na kraju sekcije koja se završava na
-    //    0x100000000 imalo bi bazu 0x100000000 koja bi se obmotala na 0.
+    // 3) Apsolutne bazne adrese svakog parčeta
     for (auto& kv : merged_)
         for (auto& p : kv.second.pieces) {
             uint64_t base = (uint64_t)kv.second.baseAddr + p.offsetInMerged;
-            if (base > 0xFFFFFFFFull) {
-                std::cerr << "Error: parče sekcije '" << kv.first
-                          << "' počinje na adresi van 32-bitnog prostora\n";
-                return false;
-            }
             sectionBases_[{p.objIdx, kv.first}] = (uint32_t)base;
         }
 
     return true;
 }
 
-// ======================================================================
-//  Provera preklapanja sekcija
-// ======================================================================
 bool Linker::checkOverlaps() {
     struct Range { uint64_t lo, hi; std::string name; };   // 64-bit: hi sme biti 2^32
     std::vector<Range> rs;
@@ -235,17 +188,13 @@ bool Linker::checkOverlaps() {
     std::sort(rs.begin(), rs.end(), [](const Range& a, const Range& b){ return a.lo < b.lo; });
     for (size_t i = 0; i + 1 < rs.size(); i++) {
         if (rs[i].hi > rs[i + 1].lo) {
-            std::cerr << "Error: sekcije '" << rs[i].name << "' i '" << rs[i + 1].name
-                      << "' se preklapaju\n";
+            std::cerr << "Error: sekcije '" << rs[i].name << "' i '" << rs[i + 1].name << "' se preklapaju\n";
             return false;
         }
     }
     return true;
 }
 
-// ======================================================================
-//  Provera nerazrešenih simbola (samo -hex)
-// ======================================================================
 bool Linker::checkUnresolved() {
     bool ok = true;
     std::set<std::string> reported;
@@ -256,16 +205,6 @@ bool Linker::checkUnresolved() {
         }
     };
 
-    // Svaki nedefinisan GLOBAL simbol (uključujući nekorišćene .extern) koji nije
-    // definisan ni u jednom ulazu je nerazrešen.
-    //
-    // Zaseban prolazak kroz relokacije je suvišan: relokacija po imenu referiše
-    // samo GLOBALAN simbol (garantuje asembler u backpatch-u, a čuva -relocatable
-    // izlaz). Ako takav simbol nije u globalDefs_, nigde nije definisan kao
-    // globalan; tada u objektu koji nosi relokaciju postoji njegov globalan+
-    // nedefinisan unos u symtab-u, pa ga ova petlja već prijavljuje. To je i
-    // preduslov koji applyRelocations() koristi (globalDefs_.at(symbol) je bezbedan
-    // jer nerazrešeni ulaz ovde vraća grešku).
     for (auto& obj : objects_)
         for (auto& kv : obj.model.symtab) {
             const Symbol& s = kv.second;
@@ -283,9 +222,6 @@ uint32_t Linker::sectionBase(int objIdx, const std::string& sec, bool& ok) const
     ok = true; return it->second;
 }
 
-// ======================================================================
-//  Primena relokacija (ABS_32) – samo -hex
-// ======================================================================
 bool Linker::applyRelocations() {
     for (int i = 0; i < (int)objects_.size(); i++) {
         for (auto& scKV : objects_[i].model.sections) {
@@ -297,21 +233,16 @@ bool Linker::applyRelocations() {
             for (auto& p : ms.pieces) if (p.objIdx == i) { pieceOff = p.offsetInMerged; break; }
 
             for (auto& r : sec.relocs) {
-                uint32_t patchPos = pieceOff + r.offset;   // opseg već validiran pri učitavanju
+                uint32_t patchPos = pieceOff + r.offset;
 
-                // Adresu računamo u 64 bita da bismo otkrili "obmotavanje":
-                // simbol na kraju sekcije koja se završava tačno na 2^32 imao bi
-                // adresu 0x100000000 koja se u 32 bita svodi na 0.
                 bool ok = true;
                 int64_t addr;
                 if (!r.symbol.empty() && r.symbol[0] == '.') {
                     addr = (int64_t)sectionBase(i, r.symbol.substr(1), ok) + (int64_t)r.addend;
                 } else {
-                    // Simbol je garantovano razrešen: checkUnresolved() se izvršava pre
-                    // applyRelocations() i odbija svaku relokaciju bez definicije.
                     const GlobalDef& gd = globalDefs_.at(r.symbol);
                     addr = (int64_t)sectionBase(gd.objIdx, gd.section, ok)
-                         + (int64_t)gd.value + (int64_t)r.addend;
+                         + (int64_t)gd.value + (int64_t)r.addend; //addend je ovde uvek 0
                 }
                 if (!ok) {
                     std::cerr << "Error: ne mogu da razrešim relokaciju u sekciji '" << sn << "'\n";
@@ -334,9 +265,6 @@ bool Linker::applyRelocations() {
     return true;
 }
 
-// ======================================================================
-//  Izlaz -hex : parovi (adresa, sadržaj), 8 bajtova po redu
-// ======================================================================
 bool Linker::writeHex() {
     std::vector<const MergedSection*> secs;
     for (auto& kv : merged_) if (!kv.second.data.empty()) secs.push_back(&kv.second);
@@ -360,12 +288,11 @@ bool Linker::writeHex() {
     return true;
 }
 
-// ======================================================================
+
 //  Izlaz -relocatable : spojeni predmetni program u SSOB formatu
-//  (sve sekcije od nulte adrese; -place se ignoriše)
-// ======================================================================
+//  sve sekcije od nulte adrese; -place se ignoriše
 bool Linker::writeRelocatable() {
-    // Ofset parčeta (objIdx, sekcija) unutar agregirane sekcije.
+    
     std::map<std::pair<int, std::string>, uint32_t> pieceOff;
     for (auto& kv : merged_)
         for (auto& p : kv.second.pieces)
@@ -374,12 +301,12 @@ bool Linker::writeRelocatable() {
     ObjectModel out;
     out.sectionOrder = mergedOrder_;
 
-    // --- Sekcije: podaci + prilagođene relokacije ---
     for (auto& sn : mergedOrder_) {
         MergedSection& ms = merged_[sn];
         ObjSectionData sd;
-        sd.data = ms.data;                       // spojeni bajtovi (od adrese 0)
+        sd.data = ms.data;
 
+        //za relokacije koje se odnose na sekcije dodajmeo offset, zbog pieceOff
         for (auto& p : ms.pieces) {
             int oi = p.objIdx;
             auto secIt = objects_[oi].model.sections.find(sn);
@@ -390,16 +317,14 @@ bool Linker::writeRelocatable() {
                 nr.offset = r.offset + p.offsetInMerged;
                 nr.symbol = r.symbol;
                 nr.addend = r.addend;
-                // Sekcijski simbol pokriva celu agregiranu sekciju -> addend
-                // se pomera za ofset referisane sekcije u tom objektu. Račun je
-                // u uint32 (modularno, dobro definisano): za ofset > 0x7FFFFFFF
-                // bi `(int32_t)pieceOffset` bio negativan i signed-overflow (UB);
-                // ovako je 32-bitni obrazac bita uvek ispravan.
+                
+                //ovo je zbog sekcije int
                 if (!r.symbol.empty() && r.symbol[0] == '.') {
                     auto pit = pieceOff.find({ oi, r.symbol.substr(1) });
                     if (pit != pieceOff.end())
                         nr.addend = (int32_t)((uint32_t)nr.addend + pit->second);
                 }
+
                 // Održavamo invarijantu: data[slot] == addend (kao kod asemblera).
                 uint32_t a = (uint32_t)nr.addend;
                 sd.data[nr.offset + 0] = (uint8_t)( a        & 0xFF);
@@ -412,15 +337,14 @@ bool Linker::writeRelocatable() {
         out.sections[sn] = std::move(sd);
     }
 
-    // --- Simboli ---
-    // a) sekcijski simbol za svaku agregiranu sekciju
+    // sekcijski simbol za svaku agregiranu sekciju
     for (auto& sn : mergedOrder_) {
         Symbol s;
         s.type = SymbolType::SECTION; s.value = 0; s.section = sn;
         s.isGlobal = false; s.isDefined = true;
         out.symtab["." + sn] = s;
     }
-    // b) globalne definisane simbole (vrednost pomerena za ofset parčeta)
+    // globalne definisane simbole (vrednost pomerena za ofset parčeta)
     for (auto& kv : globalDefs_) {
         const std::string& name = kv.first;
         const GlobalDef&   gd   = kv.second;
@@ -432,7 +356,7 @@ bool Linker::writeRelocatable() {
         s.isGlobal = true; s.isDefined = true;
         out.symtab[name] = s;
     }
-    // c) preostale nerazrešene (UND) globalne simbole
+    // preostale nerazrešene (UND) globalne simbole
     std::set<std::string> undEmitted;
     for (auto& obj : objects_) {
         for (auto& kv : obj.model.symtab) {
@@ -458,19 +382,14 @@ bool Linker::writeRelocatable() {
     return true;
 }
 
-// ======================================================================
-//  Glavni tok
-// ======================================================================
 int Linker::run(int argc, char* argv[]) {
     if (!parseArgs(argc, argv)) return 1;
 
-    // 1) Najpre učitaj SVE ulazne fajlove (strukturu proverava objReadBinary).
     for (auto& file : inputFiles_)
         if (!loadObject(file)) return 1;
 
-    // 2) Tek onda agregacija, tabela simbola i povezivanje.
     if (!mergeSections())     return 1;
-    if (!collectGlobalDefs()) return 1;   // višestruke definicije (oba režima)
+    if (!collectGlobalDefs()) return 1;   
 
     if (hexMode_) {
         if (!placeSections())    return 1;
@@ -478,7 +397,7 @@ int Linker::run(int argc, char* argv[]) {
         if (!checkUnresolved())  return 1;
         if (!applyRelocations()) return 1;
         if (!writeHex())         return 1;
-    } else { // relocMode_
+    } else { // relocMode
         if (!writeRelocatable()) return 1;
     }
     return 0;

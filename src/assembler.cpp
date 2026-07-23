@@ -1,4 +1,3 @@
-// assembler.cpp – SS 2025/2026
 #include "assembler.hpp"
 #include "objfile.hpp"
 #include <cstdio>
@@ -11,13 +10,12 @@ extern int   yylineno;
 extern FILE* yyin;
 Assembler* gAssembler = nullptr;
 
-// ===== Konstruktor =====
+// Konstruktor 
 Assembler::Assembler(const std::string& inFile, const std::string& outFile)
     : inFile_(inFile), outFile_(outFile), curSection_(""),
       pendingInstr_(0), pendingNeedsPool_(false),
       pendingLdNeedsDeref_(false) {}
 
-// ===== assemble() =====
 int Assembler::assemble() {
     yyin = fopen(inFile_.c_str(), "r");
     if (!yyin) { fprintf(stderr,"Error: ne mogu da otvorim '%s'\n",inFile_.c_str()); return 1; }
@@ -32,7 +30,7 @@ int Assembler::assemble() {
     return 0;
 }
 
-// ===== Interne metode =====
+// Privatne metode 
 SectionInfo& Assembler::curSec() {
     if (curSection_.empty()) { fprintf(stderr,"Error (linija %d): izvan sekcije\n",yylineno); exit(1); }
     return sections_[curSection_];
@@ -53,7 +51,7 @@ int32_t Assembler::parseLit(const char* s) {
 }
 bool Assembler::isNumStr(const std::string& s) {
     if (s.empty()) return false;
-    char* e; strtol(s.c_str(),&e,0); return *e=='\0';
+    char* e; strtol(s.c_str(),&e,0); return *e=='\0'; //strtol za xy vraca 0, za 123xy vraca 123
 }
 
 void Assembler::appendLE32(SectionInfo& sec, uint32_t value) {
@@ -76,7 +74,7 @@ uint32_t Assembler::read32(const SectionInfo& sec, int off) {
           |((uint32_t)sec.data[off+2]<<16)|((uint32_t)sec.data[off+3]<<24);
 }
 void Assembler::ensureSymStub(const std::string& name) {
-    // Podrazumevani Symbol() je već {UND, 0, "UND", not-global, not-defined}.
+    // {UND, 0, "UND", not-global, not-defined}.
     if (!symtab_.count(name)) symtab_[name] = Symbol();
 }
 
@@ -117,9 +115,6 @@ void Assembler::addReloc(SectionInfo& sec, int off, const std::string& sym, int 
     sec.relocs.push_back(r);
 }
 
-// Sve relokacije koje asembler generiše su ABS_32 (nema PC_REL relokacija):
-// grane (beq/bne/bgt), jmp i call razrešavaju odredište preko bazena literala,
-// a .word <simbol> preko addReloc — u svim slučajevima je zapis ABS_32.
 void Assembler::backpatch() {
     for (auto& kv : sections_) {
         const std::string& sn=kv.first;
@@ -127,11 +122,6 @@ void Assembler::backpatch() {
         std::vector<RelEntry> keep;
         for (auto& rel : sec.relocs) {
             auto it=symtab_.find(rel.symbol);
-            // backpatch se poziva TEK nakon kompletnog parsiranja, pa je tabela
-            // simbola potpuna: lokalna labela definisana kasnije u fajlu je ovde
-            // već isDefined (biće razrešena u sekcijsku relokaciju ispod). Simbol
-            // koji ni tada ne postoji u tabeli može biti samo referenca na
-            // nedefinisan lokalan simbol -> greška asemblera.
             if (it==symtab_.end()) {
                 fprintf(stderr,"Error: referenca na nedefinisan lokalan simbol '%s' (nedostaje definicija ili .extern)\n",rel.symbol.c_str());
                 exit(1);
@@ -150,11 +140,6 @@ void Assembler::backpatch() {
                 RelEntry r2; r2.offset=rel.offset;
                 r2.symbol="."+sym.section; r2.addend=ad; keep.push_back(r2); continue;
             }
-            // Ovde dolaze samo simboli koje asembler ostavlja linkeru: globalni
-            // (definisani) i .extern/nedefinisani globalni. Ako je simbol lokalan,
-            // onda je (pošto ga gornje grane nisu razrešile) lokalan nedefinisan
-            // -> greška: linker takav simbol ne sme da razreši istoimenim globalom
-            // iz drugog fajla. (Ranije je ovo hvatao Linker::validateObject.)
             if (!sym.isGlobal) {
                 fprintf(stderr,"Error: referenca na nedefinisan lokalan simbol '%s' (nedostaje definicija ili .extern)\n",rel.symbol.c_str());
                 exit(1);
@@ -181,7 +166,7 @@ ObjectModel Assembler::buildModel() const {
             ObjReloc rr;
             rr.offset = (uint32_t)r.offset;
             rr.symbol = r.symbol;
-            rr.addend = (int32_t)r.addend;   // tip se ne čuva – sve su ABS_32
+            rr.addend = (int32_t)r.addend;
             sd.relocs.push_back(rr);
         }
         m.sections[sectionName] = std::move(sd);
@@ -189,14 +174,12 @@ ObjectModel Assembler::buildModel() const {
     return m;
 }
 
-// Binarni predmetni fajl (sopstveni format "SSOB"), otvoren u binarnom modu.
 void Assembler::writeBinaryOutput(const std::string& path) {
     std::ofstream f(path, std::ios::binary);
     if (!f) { fprintf(stderr,"Error: ne mogu '%s'\n",path.c_str()); exit(1); }
     objWriteBinary(f, buildModel());
 }
 
-// Čitljivi tekstualni prikaz istog predmetnog fajla.
 void Assembler::writeTextOutput(const std::string& path) {
     std::ofstream f(path);
     if (!f) { fprintf(stderr,"Error: ne mogu '%s'\n",path.c_str()); exit(1); }
@@ -269,9 +252,6 @@ void Assembler::defineLabel(const char* name) {
 void Assembler::encodeHalt() { emit32(0x00000000u); }
 void Assembler::encodeInt()  { emit32(0x10000000u); }
 void Assembler::encodeIret() {
-    // Vrati status pa pc, i tek na kraju pomeri sp za 8. Redosled je bitan: prva
-    // instrukcija vraća status (ne dira sp, ne skače), a druga učitava pc i uvećava
-    // sp (skače) — tako se OBE izvrše i stek se korektno oslobodi (sp += 8).
     emit32(0x960E0004u); // status <= mem32[sp+4]
     emit32(0x93FE0008u); // pc <= mem32[sp]; sp <= sp+8
 }
@@ -332,7 +312,7 @@ void Assembler::encodeShr(const char* rs, const char* rd) {
     encodeAluRR(0x71000000u, rs, rd);
 }
 
-// JMP/CALL: emit pool-instrukciju pa flush patch-uje pomeraj
+// JMP/CALL
 void Assembler::encodeJmpLit(const char* numStr) {
     if (curSection_.empty()) { fprintf(stderr,"Error: jmp izvan sekcije\n"); exit(1); }
     int pos=lc(); emit32(0x38F00000u); addToPool(std::string(numStr),pos);
@@ -345,17 +325,15 @@ void Assembler::encodeJmpSym(const char* symName) {
 void Assembler::switchToCall() {
     SectionInfo& sec=curSec(); int pos=sec.lc-4;
     uint32_t insn=read32(sec,pos);
-    // JMP(OC=3,MOD=8,A=15) → CALL(OC=2,MOD=1,A=15), zadržavamo D
-    patch32(sec,pos,(insn&0x000FFFFFu)|0x21F00000u);
+    patch32(sec,pos,(insn&0x000FFFFFu)|0x21F00000u); // zadržavamo D iz jmp_op
 }
 void Assembler::patchBranch(BranchType bt, const char* reg1, const char* reg2) {
     SectionInfo& sec=curSec(); int pos=sec.lc-4;
     uint32_t insn=read32(sec,pos);
     int r1=regIdx(reg1), r2=regIdx(reg2);
     uint8_t mod=(bt==BR_BEQ)?0x9:(bt==BR_BNE)?0xA:0xB;
-    // OC=3, MOD=mod, A=15, B=r1, C=r2, D=disp(iz poola)
     patch32(sec,pos,0x30000000u|((uint32_t)(mod&0xF)<<24)|(0xF<<20)|
-                    ((r1&0xF)<<16)|((r2&0xF)<<12)|(insn&0xFFFu));
+                    ((r1&0xF)<<16)|((r2&0xF)<<12)|(insn&0xFFFu)); // zadržavamo D iz jmp_op
 }
 
 // LD operandi
@@ -365,7 +343,6 @@ void Assembler::ldImmediateOp(const char* imm) {
     if (isNumStr(val)) {
         int32_t v=(int32_t)strtol(val.c_str(),nullptr,0);
         if (v>=-2048&&v<=2047) {
-            // OC=9,MOD=1,A=rd(patch),B=0,D=v → gpr[A]<=0+v
             pendingInstr_=0x91000000u|((uint32_t)v&0xFFFu); pendingNeedsPool_=false; return;
         }
     }
@@ -395,9 +372,6 @@ void Assembler::ldMemRegLitOp(const char* reg, const char* numStr) {
     pendingNeedsPool_=false; pendingLdNeedsDeref_ = false;
 }
 void Assembler::ldMemRegSymOp(const char* reg, const char* sym) {
-    // Konacna vrednost simbola nije poznata u trenutku asembliranja
-    // (labele su relativne u odnosu na sekciju, extern simboli nedefinisani),
-    // pa je [%reg + simbol] po postavci uvek greska u procesu asembliranja.
     (void)reg;
     fprintf(stderr,"Error (linija %d): konacna vrednost simbola '%s' u [%%reg + simbol] nije poznata u trenutku asembliranja\n",yylineno, sym);
     exit(1);
@@ -437,8 +411,6 @@ void Assembler::stMemRegLitOp(const char* reg, const char* numStr) {
     pendingNeedsPool_=false; 
 }
 void Assembler::stMemRegSymOp(const char* reg, const char* sym) {
-    // Isto kao kod ld: konacna vrednost simbola nije poznata u trenutku
-    // asembliranja, pa je [%reg + simbol] po postavci uvek greska.
     (void)reg;
     fprintf(stderr, "Error (linija %d): konacna vrednost simbola '%s' u [%%reg + simbol] nije poznata u trenutku asembliranja\n", yylineno, sym);
     exit(1);
@@ -463,7 +435,7 @@ void Assembler::encodeCsrwr(const char* gpr, const char* csr) {
     emit32(0x94000000u|((csrIdx(csr)&0xF)<<20)|((regIdx(gpr)&0xF)<<16));
 }
 
-// ===== main =====
+// main 
 int main(int argc, char* argv[]) {
     const char* outFile="izlaz.o", *inFile=nullptr;
     for (int i=1;i<argc;i++) {

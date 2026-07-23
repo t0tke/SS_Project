@@ -1,4 +1,3 @@
-// emulator.cpp – SS 2025/2026 – Interpretativni emulator (nivo B)
 #include "emulator.hpp"
 
 #include <cstdio>
@@ -9,34 +8,25 @@
 #include <string>
 #include <unistd.h>
 
-// ---- Konstante sistema ----
 namespace {
-    constexpr uint32_t RESET_PC   = 0x40000000u;   // adresa prve instrukcije nakon reseta
-    constexpr uint32_t TERM_OUT   = 0xFFFFFF00u;    // registar izlaznih podataka terminala
-    constexpr uint32_t TERM_IN    = 0xFFFFFF04u;    // registar ulaznih podataka terminala
+    constexpr uint32_t RESET_PC   = 0x40000000u;  
+    constexpr uint32_t TERM_OUT   = 0xFFFFFF00u;    
+    constexpr uint32_t TERM_IN    = 0xFFFFFF04u;    
 
-    // Indeksi kontrolnih/statusnih registara (csr_).
     constexpr int CSR_STATUS_INDEX  = 0;
     constexpr int CSR_HANDLER_INDEX    = 1;
     constexpr int CSR_CAUSE_INDEX   = 2;
 
-    // Raspored flegova statusne reči prema dijagramu postavke: bit0=Tr, bit1=Tl,
-    // bit2=I; za svaki 0=omogućeno, 1=maskirano. Tr (tajmer) je nivo C i ovde se ne koristi.
-    constexpr uint32_t ST_TL = 0x2;   // maskiranje prekida od terminala (bit 1)
-    constexpr uint32_t ST_I  = 0x4;   // globalno maskiranje spoljašnjih prekida (bit 2)
+    constexpr uint32_t ST_TL = 0x2; 
+    constexpr uint32_t ST_I  = 0x4;  
 
-    // Uzroci prekida (cause registar).
-    constexpr uint32_t CAUSE_BAD_INSTR = 1;   // nekorektna instrukcija
-    constexpr uint32_t CAUSE_TERMINAL  = 3;   // zahtev za prekid od terminala
-    constexpr uint32_t CAUSE_SOFTWARE  = 4;   // softverski prekid (int)
+    // Uzroci prekida
+    constexpr uint32_t CAUSE_BAD_INSTR = 1;  
+    constexpr uint32_t CAUSE_TERMINAL  = 3;  
+    constexpr uint32_t CAUSE_SOFTWARE  = 4;   
 }
 
-// ======================================================================
-//  Memorijski pristup (little-endian) + memorijski mapirani registri
-// ======================================================================
 uint32_t Emulator::load32(uint32_t addr) {
-    // Sav pristup memoriji od strane instrukcija je 32-bitni, pa memorijski
-    // mapirane registre presrećemo na nivou 32-bitne reči.
     if (addr == TERM_IN)  return termIn_;
     if (addr == TERM_OUT) return 0;  
 
@@ -50,7 +40,6 @@ uint32_t Emulator::load32(uint32_t addr) {
 
 void Emulator::store32(uint32_t addr, uint32_t value) {
     if (addr == TERM_OUT) {
-        // Terminal ispisuje znak čiji je ASCII kod niži bajt upisane vrednosti.
         unsigned char ch = (unsigned char)(value & 0xFF);
         (void)::write(STDOUT_FILENO, &ch, 1);
         return;
@@ -62,9 +51,7 @@ void Emulator::store32(uint32_t addr, uint32_t value) {
         mem_[addr + i] = (uint8_t)((value >> (8 * i)) & 0xFF);
 }
 
-// ======================================================================
-//  Učitavanje -hex ulazne datoteke
-// ======================================================================
+
 bool Emulator::loadHex(const std::string& path) {
     std::ifstream in(path);
     if (!in) {
@@ -74,9 +61,9 @@ bool Emulator::loadHex(const std::string& path) {
     std::string line;
     while (std::getline(in, line)) {
         std::size_t colon = line.find(':');
-        if (colon == std::string::npos) continue;   // prazan/nevalidan red se preskače
+        if (colon == std::string::npos) continue; 
 
-        std::string addrStr = line.substr(0, colon);   // lokalni string: c_str()/endp ostaju validni
+        std::string addrStr = line.substr(0, colon);
         char* endp = nullptr;
         unsigned long addr = std::strtoul(addrStr.c_str(), &endp, 16);
         if (*endp != '\0') {
@@ -100,11 +87,6 @@ bool Emulator::loadHex(const std::string& path) {
     return true;
 }
 
-// ======================================================================
-//  Ulazak u prekidnu rutinu
-//  Na stek se stavljaju statusna reč pa povratna adresa (tim redom), postavlja
-//  se uzrok prekida i skače na handler.
-// ======================================================================
 void Emulator::enterInterrupt(uint32_t cause) {
     uint32_t sp = gpr[14];
     sp -= 4; store32(sp, csr[CSR_STATUS_INDEX]);
@@ -112,30 +94,25 @@ void Emulator::enterInterrupt(uint32_t cause) {
     gpr[14] = sp;
 
     csr[CSR_CAUSE_INDEX]   = cause;
-    csr[CSR_STATUS_INDEX] |= ST_I;           // globalno maskiranje prekida (postavka)
+    csr[CSR_STATUS_INDEX] |= ST_I; //globalno maskiranje prekida
     gpr[15]          = csr[CSR_HANDLER_INDEX   ];
 }
 
-// ======================================================================
-//  Terminal: očitavanje tastature (bez baferisanja, neblokirajuće)
-// ======================================================================
+
 void Emulator::checkTerminalInput() {
     unsigned char ch;
     ssize_t n = ::read(STDIN_FILENO, &ch, 1);
     if (n == 1) {
-        // Novi pritisak gazi eventualnu prethodnu, još nepročitanu vrednost.
+        // Novi pritisak gazi eventualnu prethodnu
         termIn_      = ch;
         termPending_ = true;
     }
 }
 
-// ======================================================================
-//  Izvršavanje jedne instrukcije
-// ======================================================================
 void Emulator::step() {
     uint32_t pc = gpr[15];
     uint32_t word = load32(pc);
-    gpr[15] = pc + 4;             // podrazumevani sledeći pc (skokovi ga menjaju)
+    gpr[15] = pc + 4; 
 
     uint32_t oc  = (word >> 28) & 0xF;
     uint32_t mod = (word >> 24) & 0xF;
@@ -176,8 +153,6 @@ void Emulator::step() {
             default:  enterInterrupt(CAUSE_BAD_INSTR);                      return;
         }
         if (take) {
-            // Odredište (i eventualno indirektno čitanje) računamo tek kada se skok
-            // zaista izvršava.
             uint32_t addr = gpr[a] + (uint32_t)D;
             gpr[15] = indir ? load32(addr) : addr;
         }
@@ -201,8 +176,7 @@ void Emulator::step() {
             case 0x3: {
                 int32_t bb = (int32_t)gpr[b], cc = (int32_t)gpr[c];
                 if (cc == 0) { enterInterrupt(CAUSE_BAD_INSTR); return; }   // deljenje nulom
-                uint32_t res = (bb == INT32_MIN && cc == -1)
-                                 ? (uint32_t)INT32_MIN : (uint32_t)(bb / cc);
+                uint32_t res = (bb == INT32_MIN && cc == -1) ? (uint32_t)INT32_MIN : (uint32_t)(bb / cc);
                 setGpr(a, res);
                 return;
             }
@@ -253,8 +227,6 @@ void Emulator::step() {
                 setGpr(a, load32(gpr[b] + gpr[c] + (uint32_t)D));
                 return;
             case 0x3: // gpr[A]<=mem32[gpr[B]]; gpr[B]<=gpr[B]+D  (post-inkrement)
-                // Redosled iz postavke: prvo upiši A (čita staro gpr[B]), pa tek onda
-                // uvećaj B. Kada je A==B, ovo daje mem32[stari gpr[B]]+D (npr. pop %sp).
                 setGpr(a, load32(gpr[b]));
                 setGpr(b, gpr[b] + (uint32_t)D);
                 return;
@@ -286,38 +258,26 @@ void Emulator::step() {
     }
 }
 
-// ======================================================================
-//  Ispis stanja procesora nakon halt instrukcije
-// ======================================================================
 void Emulator::printProcessorState() const {
     std::printf("-----------------------------------------------------------------\n");
     std::printf("Emulated processor executed halt instruction\n");
     std::printf("Emulated processor state:\n");
     for (int i = 0; i < 16; i++) {
         std::printf("%s%sr%d=0x%08x",
-                    (i % 4 == 0 ? "" : "   "),   // 3 razmaka između registara u redu
-                    (i < 10 ? " " : ""),         // vodeći razmak: ime desno poravnato na 3 znaka
+                    (i % 4 == 0 ? "" : "   "),   
+                    (i < 10 ? " " : ""),      
                     i, gpr[i]);
         if (i % 4 == 3) std::printf("\n");
     }
     std::fflush(stdout);
 }
 
-// ======================================================================
-//  Terminal: sirovi neblokirajući ulaz (bez eho prikaza)
-//
-//  Dovoljan je "raw" režim sa VMIN=0 i VTIME=0: čitanje se ne baferiše do
-//  Enter-a (ICANON off), ne prikazuje se ukucani znak (ECHO off), a read()
-//  se vraća odmah — sa 1 bajtom ako je taster pritisnut, inače sa 0 bajtova.
-//  Time je čitanje neblokirajuće i po jednom znaku, bez potrebe za O_NONBLOCK.
-// ======================================================================
 void Emulator::termInit() {
     if (isatty(STDIN_FILENO) && tcgetattr(STDIN_FILENO, &savedTermios_) == 0) {
         termios raw = savedTermios_;
         raw.c_lflag &= ~(ICANON | ECHO);   // bez linijskog baferisanja i bez eha
         raw.c_cc[VMIN]  = 0;               // read() ne čeka: 0 bajtova ako nema tastera
         raw.c_cc[VTIME] = 0;               // i bez tajmauta
-        // Označi terminal sirovim samo ako je postavljanje zaista uspelo.
         if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) == 0) termiosChanged_ = true;
     }
 }
@@ -329,9 +289,6 @@ void Emulator::termRestore() {
     }
 }
 
-// ======================================================================
-//  Glavni tok
-// ======================================================================
 int Emulator::run(int argc, char* argv[]) {
     if (argc != 2) {
         std::fprintf(stderr, "Upotreba: emulator <naziv_ulazne_datoteke>\n");
@@ -343,14 +300,13 @@ int Emulator::run(int argc, char* argv[]) {
     termInit();
 
     while (running) {
-        // 1) Očitaj tastaturu i, ako nije maskiran, opsluži prekid od terminala.
         checkTerminalInput();
         if (termPending_ && (csr[CSR_STATUS_INDEX] & ST_I) == 0
                          && (csr[CSR_STATUS_INDEX] & ST_TL) == 0) {
             termPending_ = false;
             enterInterrupt(CAUSE_TERMINAL);
         }
-        // 2) Atomično izvrši narednu instrukciju.
+        
         step();
     }
 

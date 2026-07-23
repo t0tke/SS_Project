@@ -17,7 +17,7 @@ inline const char* symTypeName(SymbolType t) {
 
 struct Symbol {
     SymbolType type; 
-    uint32_t value;      // ofset/adresa u 32-bitnom neoznačenom adresnom prostoru
+    uint32_t value;      // ofset/adresa 
     std::string section;
     bool isGlobal;
     bool isDefined;
@@ -42,7 +42,7 @@ struct SectionInfo {
     std::vector<PoolEntry> pool;
 };
 
-struct ObjectModel; // definisan u objfile.hpp (neutralni model predmetnog fajla)
+struct ObjectModel; 
 
 class Assembler {
 public:
