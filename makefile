@@ -82,7 +82,7 @@ testb: all
 #  direktorijuma. NE dira .s fajlove, start.sh, izvorni kod ni zaglavlja.
 clean:
 	rm -rf $(OBJ_DIR) obj_linker
-	rm -f assembler linker emulator objreader
+	rm -f assembler linker emulator
 	rm -f $(SRC_DIR)/parser.cpp $(INC_DIR)/parser.hpp $(SRC_DIR)/lexer.cpp
 	rm -f *.o *.o.txt *.hex
 	rm -f tests/nivo-a/*.o tests/nivo-a/*.o.txt tests/nivo-a/*.hex

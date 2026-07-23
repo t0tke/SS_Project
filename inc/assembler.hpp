@@ -4,7 +4,7 @@
 #include <map>
 #include <cstdint>
 
-enum BranchType { BR_BEQ = 1, BR_BNE = 2, BR_BGT = 3 }; // Usklađen enum sa .cpp
+enum BranchType { BR_BEQ = 1, BR_BNE = 2, BR_BGT = 3 };
 enum class SymbolType { UND, LABEL, SECTION };
 
 inline const char* symTypeName(SymbolType t) {
@@ -13,7 +13,7 @@ inline const char* symTypeName(SymbolType t) {
         case SymbolType::SECTION: return "SECTION";
         default:                  return "UND";
     }
-};
+}
 
 struct Symbol {
     SymbolType type; 

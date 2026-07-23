@@ -7,7 +7,7 @@
 // ============================================================================
 //  TEKSTUALNI PRIKAZ
 //  Identičan izgledu koji je asembler oduvek generisao (samo je izmešten ovde
-//  da bi ga delili asembler i pomoćni reader). Zapisi su razdvojeni belinama,
+//  da bi ga delili asembler i linker). Zapisi su razdvojeni belinama,
 //  poravnanje je samo estetsko.
 // ============================================================================
 void objWriteText(std::ostream& f, const ObjectModel& m) {

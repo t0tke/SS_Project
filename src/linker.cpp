@@ -99,7 +99,6 @@ bool Linker::loadObject(const std::string& filename) {
     if (!f) { std::cerr << "Error: ne mogu da otvorim '" << filename << "'\n"; return false; }
 
     LoadedObject obj;
-    obj.filename = filename;
     if (!objReadBinary(f, obj.model)) {
         std::cerr << "Error: '" << filename << "' nije validan SSOB predmetni fajl\n";
         return false;

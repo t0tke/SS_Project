@@ -3,7 +3,6 @@
 // Sistemski softver 2025/2026
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include "assembler.hpp"
 
 extern int  yylex();

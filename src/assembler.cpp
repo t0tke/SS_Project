@@ -5,7 +5,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
-#include <iomanip>
 
 extern int   yyparse();
 extern int   yylineno;
@@ -77,10 +76,8 @@ uint32_t Assembler::read32(const SectionInfo& sec, int off) {
           |((uint32_t)sec.data[off+2]<<16)|((uint32_t)sec.data[off+3]<<24);
 }
 void Assembler::ensureSymStub(const std::string& name) {
-    if (!symtab_.count(name)) {
-        Symbol s; s.type=SymbolType::UND; s.value=0; s.section="UND"; s.isGlobal=false; s.isDefined=false;
-        symtab_[name]=s;
-    }
+    // Podrazumevani Symbol() je već {UND, 0, "UND", not-global, not-defined}.
+    if (!symtab_.count(name)) symtab_[name] = Symbol();
 }
 
 void Assembler::addToPool(const std::string& lit, int instrPos) {
@@ -120,12 +117,9 @@ void Assembler::addReloc(SectionInfo& sec, int off, const std::string& sym, int 
     sec.relocs.push_back(r);
 }
 
-/*
-PC_REL grana u backpatch je potpuno mrtav kod jer:
-
-Branch (beq, bne, bgt) → ide kroz pool → relokacija je ABS_32
-JMP/CALL → ide kroz pool → relokacija je ABS_32
-.word simbol → addReloc → relokacija je ABS_32*/
+// Sve relokacije koje asembler generiše su ABS_32 (nema PC_REL relokacija):
+// grane (beq/bne/bgt), jmp i call razrešavaju odredište preko bazena literala,
+// a .word <simbol> preko addReloc — u svim slučajevima je zapis ABS_32.
 void Assembler::backpatch() {
     for (auto& kv : sections_) {
         const std::string& sn=kv.first;
@@ -211,7 +205,7 @@ void Assembler::writeTextOutput(const std::string& path) {
 
 // ===== Direktive =====
 void Assembler::directiveGlobal(const char* sym) {
-    std::string n(sym); // konstruktor koji konvertuje const char* u std::string!
+    std::string n(sym);
     ensureSymStub(n); symtab_[n].isGlobal=true;
 }
 void Assembler::directiveExtern(const char* sym) { directiveGlobal(sym); }

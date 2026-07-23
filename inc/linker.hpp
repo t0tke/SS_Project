@@ -13,7 +13,6 @@
 
 // ---------- učitani ulazni predmetni program ----------
 struct LoadedObject {
-    std::string filename;
     ObjectModel model;
 };
 
