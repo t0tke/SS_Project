@@ -63,6 +63,7 @@ public:
     // Instrukcije
     void encodeHalt(); void encodeInt(); void encodeIret(); void encodeRet();
     void encodePush(const char* reg); void encodePop(const char* reg); void encodeNot(const char* reg);
+    void incReg(const char* reg); void decReg(const char* reg);
     void encodeXchg(const char* rs, const char* rd);
     void encodeAddWithShiftLeft(const char* rs, const char* rd, const char* numStr);
     void encodeAddWithShiftRight(const char* rs, const char* rd, const char* numStr);

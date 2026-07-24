@@ -31,6 +31,7 @@ extern Assembler* gAssembler;
 %token COLON COMMA LBRACKET RBRACKET PLUS 
 %token LCRACKET RCRACKET
 %token SHIFTLEFT SHIFTRIGHT
+%token INC DEC
 
 %token <str> REGISTER
 %token <str> CSR
@@ -98,6 +99,8 @@ instruction:
     | INT                          { gAssembler->encodeInt(); }
     | IRET                         { gAssembler->encodeIret(); }
     | RET                          { gAssembler->encodeRet(); }
+    | INC REGISTER                 { gAssembler->incReg($2); free($2);}
+    | DEC REGISTER                 { gAssembler->decReg($2); free($2);}
     | PUSH REGISTER                { gAssembler->encodePush($2); free($2); }
     | PUSH LCRACKET reg_list RCRACKET {}
     | POP  REGISTER                { gAssembler->encodePop($2); free($2); }

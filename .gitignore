@@ -41,3 +41,4 @@ Thumbs.db
 /tests/push_list_tests
 /tests/add_shift_tests_v2
 /tests/reg_reg_addressing_tests
+/tests/inc_dec_reg_tests

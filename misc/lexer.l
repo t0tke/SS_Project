@@ -52,6 +52,8 @@ ld                        { return LD;    }
 st                        { return ST;    }
 csrrd                     { return CSRRD; }
 csrwr                     { return CSRWR; }
+inc                       { return INC;}
+dec                       { return DEC;}
 
 %status                   { yylval.str = strdup(yytext + 1); return CSR; }
 %handler                  { yylval.str = strdup(yytext + 1); return CSR; }

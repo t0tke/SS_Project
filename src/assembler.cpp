@@ -256,6 +256,14 @@ void Assembler::encodeIret() {
 }
 void Assembler::encodeRet()  { emit32(0x93FE0004u); }
 
+void Assembler::incReg(const char* reg){
+    emit32(0xB0000000|((regIdx(reg)&0xF)<<20));
+}
+
+void Assembler::decReg(const char* reg){
+    emit32(0xB1000000|((regIdx(reg)&0xF)<<20));
+}
+
 void Assembler::encodePush(const char* reg) {
     int r=regIdx(reg);
     emit32(0x81E00000u|((r&0xF)<<12)|((uint32_t)((-4)&0xFFF)));

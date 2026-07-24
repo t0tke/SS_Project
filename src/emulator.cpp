@@ -121,7 +121,14 @@ void Emulator::step() {
     int32_t  D   = (int32_t)((word & 0xFFF)<<20) >> 20;
 
     switch (oc) {
-    case 0xA: //rs-20 rd-16
+    case 0xB: //reg-20 OVO JE INC DEC REG
+        switch (mod) {
+            case 0x0: setGpr(a,gpr[a]+1); return;
+            case 0x1: setGpr(a,gpr[a]-1); return;
+            default: enterInterrupt(CAUSE_BAD_INSTR); return;
+        }
+        return;
+    case 0xA: //rs-20 rd-16 OVO JE ADD RS RD << NUM
         switch (mod) {
             case 0x0: setGpr(b,(gpr[b]<<D)+gpr[a]); return;
             case 0x1: setGpr(b,(gpr[b]>>D)+gpr[a]); return;
