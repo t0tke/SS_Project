@@ -80,10 +80,13 @@ public:
     void ldImmediateOp(const char* imm); void ldMemLitOp(const char* numStr);
     void ldMemSymOp(const char* symName); void ldRegOp(const char* reg);
     void ldMemRegOp(const char* reg); void ldMemRegLitOp(const char* reg, const char* numStr);
+    void ldMemRegReg(const char* reg1, const char* reg2);
     void ldMemRegSymOp(const char* reg, const char* sym); void finalizeLD(const char* rd);
     
     void stMemLitOp(const char* numStr); void stMemSymOp(const char* symName);
+    void stMemRegReg(const char* reg1, const char* reg2);
     void stMemRegOp(const char* reg); void stMemRegLitOp(const char* reg, const char* numStr);
+
     void stMemRegSymOp(const char* reg, const char* sym); void finalizeST(const char* rs);
 
 private:

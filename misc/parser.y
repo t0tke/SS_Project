@@ -145,6 +145,7 @@ ld_op:
     | REGISTER                               { gAssembler->ldRegOp($1); free($1); }
     | LBRACKET REGISTER RBRACKET             { gAssembler->ldMemRegOp($2); free($2); }
     | LBRACKET REGISTER PLUS NUMBER RBRACKET { gAssembler->ldMemRegLitOp($2, $4); free($2); free($4); }
+    | LBRACKET REGISTER PLUS REGISTER RBRACKET { gAssembler->ldMemRegReg($2, $4); free($2); free($4); }
     | LBRACKET REGISTER PLUS SYMBOL RBRACKET { gAssembler->ldMemRegSymOp($2, $4); free($2); free($4); }
     ;
 
@@ -153,6 +154,7 @@ st_op:
     | SYMBOL                                 { gAssembler->stMemSymOp($1); free($1); }
     | LBRACKET REGISTER RBRACKET             { gAssembler->stMemRegOp($2); free($2); }
     | LBRACKET REGISTER PLUS NUMBER RBRACKET { gAssembler->stMemRegLitOp($2, $4); free($2); free($4); }
+    | LBRACKET REGISTER PLUS REGISTER RBRACKET { gAssembler->stMemRegReg($2, $4); free($2); free($4); }
     | LBRACKET REGISTER PLUS SYMBOL RBRACKET { gAssembler->stMemRegSymOp($2, $4); free($2); free($4); }
     ;
 

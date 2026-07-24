@@ -385,6 +385,9 @@ void Assembler::ldMemRegSymOp(const char* reg, const char* sym) {
     fprintf(stderr,"Error (linija %d): konacna vrednost simbola '%s' u [%%reg + simbol] nije poznata u trenutku asembliranja\n",yylineno, sym);
     exit(1);
 }
+void Assembler::ldMemRegReg(const char* reg1, const char* reg2){
+    pendingInstr_=0x92000000u|((regIdx(reg1)&0xF)<<16|((regIdx(reg2)&0xF))<<12); pendingNeedsPool_=false; pendingLdNeedsDeref_ = false;
+}
 
 void Assembler::finalizeLD(const char* rd) {
     int r=regIdx(rd);
@@ -412,6 +415,9 @@ void Assembler::stMemSymOp(const char* symName) {
 }
 void Assembler::stMemRegOp(const char* reg) {
     pendingInstr_=0x80000000u|((regIdx(reg)&0xF)<<20); pendingNeedsPool_=false; 
+}
+void Assembler::stMemRegReg(const char* reg1, const char* reg2){
+    pendingInstr_=0x80000000u|((regIdx(reg1)&0xF)<<20)|((regIdx(reg2)&0xF)<<16); pendingNeedsPool_=false; 
 }
 void Assembler::stMemRegLitOp(const char* reg, const char* numStr) {
     int32_t disp=(int32_t)strtol(numStr,nullptr,0);
