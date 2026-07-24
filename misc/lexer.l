@@ -78,6 +78,9 @@ csrwr                     { return CSRWR; }
 "{"                        { return LCRACKET; }
 "}"                        { return RCRACKET; }
 
+"<<"                       { return SHIFTLEFT; }
+">>"                       { return SHIFTRIGHT; }
+
 :                         { return COLON;    }
 ,                         { return COMMA;    }
 

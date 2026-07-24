@@ -271,6 +271,16 @@ void Assembler::encodeXchg(const char* rs, const char* rd) {
     emit32(0x40000000u|((regIdx(rd)&0xF)<<16)|((regIdx(rs)&0xF)<<12));
 }
 
+void Assembler::encodeAddWithShiftLeft(const char* rs, const char* rd, const char* numStr){
+    int32_t disp=(int32_t)strtol(numStr,nullptr,0);
+    emit32(0xA0000000|((uint32_t)disp&0xFFFu)|(uint32_t)regIdx(rs)<<20|(uint32_t)regIdx(rd)<<16);
+}
+
+void Assembler::encodeAddWithShiftRight(const char* rs, const char* rd, const char* numStr){
+    int32_t disp=(int32_t)strtol(numStr,nullptr,0);
+    emit32(0xA1000000|((uint32_t)disp&0xFFFu)|(uint32_t)regIdx(rs)<<20|(uint32_t)regIdx(rd)<<16);
+}
+
 void Assembler::encodeAluRR(uint32_t opBase,const char* rs, const char* rd) {
     int source = regIdx(rs);
     int destination = regIdx(rd);

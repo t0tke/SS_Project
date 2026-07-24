@@ -39,3 +39,4 @@ Thumbs.db
 *.swp
 *~
 /tests/push_list_tests
+/tests/add_shift_tests_v2

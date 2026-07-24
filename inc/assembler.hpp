@@ -64,6 +64,8 @@ public:
     void encodeHalt(); void encodeInt(); void encodeIret(); void encodeRet();
     void encodePush(const char* reg); void encodePop(const char* reg); void encodeNot(const char* reg);
     void encodeXchg(const char* rs, const char* rd);
+    void encodeAddWithShiftLeft(const char* rs, const char* rd, const char* numStr);
+    void encodeAddWithShiftRight(const char* rs, const char* rd, const char* numStr);
     void encodeAluRR(uint32_t opBase,const char* rs,const char* rd);
     void encodeAdd(const char* rs, const char* rd); void encodeSub(const char* rs, const char* rd);
     void encodeMul(const char* rs, const char* rd); void encodeDiv(const char* rs, const char* rd);

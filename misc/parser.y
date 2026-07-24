@@ -30,6 +30,7 @@ extern Assembler* gAssembler;
 %token DOT_WORD DOT_SKIP DOT_ASCII DOT_END
 %token COLON COMMA LBRACKET RBRACKET PLUS 
 %token LCRACKET RCRACKET
+%token SHIFTLEFT SHIFTRIGHT
 
 %token <str> REGISTER
 %token <str> CSR
@@ -103,6 +104,8 @@ instruction:
     | NOT  REGISTER                { gAssembler->encodeNot($2); free($2); }
     | XCHG REGISTER COMMA REGISTER { gAssembler->encodeXchg($2, $4); free($2); free($4); }
     | ADD  REGISTER COMMA REGISTER { gAssembler->encodeAdd($2, $4); free($2); free($4); }
+    | ADD  REGISTER COMMA REGISTER SHIFTLEFT NUMBER { gAssembler->encodeAddWithShiftLeft($2, $4, $6); free($2); free($4); free($6);}
+    | ADD  REGISTER COMMA REGISTER SHIFTRIGHT NUMBER { gAssembler->encodeAddWithShiftRight($2, $4, $6); free($2); free($4); free($6);}
     | SUB  REGISTER COMMA REGISTER { gAssembler->encodeSub($2, $4); free($2); free($4); }
     | MUL  REGISTER COMMA REGISTER { gAssembler->encodeMul($2, $4); free($2); free($4); }
     | DIV  REGISTER COMMA REGISTER { gAssembler->encodeDiv($2, $4); free($2); free($4); }
