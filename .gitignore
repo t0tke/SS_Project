@@ -38,3 +38,4 @@ stack.hh
 Thumbs.db
 *.swp
 *~
+/tests/push_list_tests

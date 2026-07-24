@@ -75,6 +75,8 @@ csrwr                     { return CSRWR; }
 \[                         { return LBRACKET; }
 \]                         { return RBRACKET; }
 \+                         { return PLUS;     }
+"{"                        { return LCRACKET; }
+"}"                        { return RCRACKET; }
 
 :                         { return COLON;    }
 ,                         { return COMMA;    }

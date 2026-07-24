@@ -28,7 +28,8 @@ extern Assembler* gAssembler;
 %token LD ST CSRRD CSRWR
 %token DOT_GLOBAL DOT_EXTERN DOT_SECTION
 %token DOT_WORD DOT_SKIP DOT_ASCII DOT_END
-%token COLON COMMA LBRACKET RBRACKET PLUS
+%token COLON COMMA LBRACKET RBRACKET PLUS 
+%token LCRACKET RCRACKET
 
 %token <str> REGISTER
 %token <str> CSR
@@ -97,6 +98,7 @@ instruction:
     | IRET                         { gAssembler->encodeIret(); }
     | RET                          { gAssembler->encodeRet(); }
     | PUSH REGISTER                { gAssembler->encodePush($2); free($2); }
+    | PUSH LCRACKET reg_list RCRACKET {}
     | POP  REGISTER                { gAssembler->encodePop($2); free($2); }
     | NOT  REGISTER                { gAssembler->encodeNot($2); free($2); }
     | XCHG REGISTER COMMA REGISTER { gAssembler->encodeXchg($2, $4); free($2); free($4); }
@@ -121,6 +123,11 @@ instruction:
     | ST  REGISTER COMMA st_op     { gAssembler->finalizeST($2); free($2); }
     | CSRRD CSR     COMMA REGISTER { gAssembler->encodeCsrrd($2, $4); free($2); free($4); }
     | CSRWR REGISTER COMMA CSR     { gAssembler->encodeCsrwr($2, $4); free($2); free($4); }
+    ;
+
+reg_list:
+      REGISTER                       { gAssembler->encodePush($1); free($1); }
+    | reg_list COMMA REGISTER        { gAssembler->encodePush($3); free($3); }
     ;
 
 jmp_op:
